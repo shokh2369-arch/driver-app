@@ -1,0 +1,120 @@
+{
+  "@@locale": "uz",
+  "online": "Online",
+  "offline": "Offline",
+  "start_trip": "Safarni boshlash",
+  "finish_trip": "Safarni tugatish",
+  "cancel_trip": "Safarni bekor qilish",
+  "arrived": "Yetib keldim",
+  "to_pickup": "Mijozga yo’lda",
+  "trip_status_ready_to_start": "Safarni boshlash mumkin",
+  "trip_arrived_need_closer": "Mijozga ~100 m yaqin bo‘ling — «Yetib keldim» ochiladi.",
+  "unfinished_trip_title": "Tugallanmagan safar",
+  "unfinished_trip_phase_started": "Safar davom etmoqda",
+  "trip_completes_on_server_hint": "Safar tugashi haydovchi ilovasidan emas — tizim holatni yangilaydi.",
+  "trip_finish_hint": "Tugatish buyurtmani yakunlaydi va holat serverga yuboriladi.",
+  "trip_completed_dialog_title": "Safar tugadi",
+  "trip_completed_ok": "Yaxshi",
+  "unfinished_trip_continue": "Davom etish",
+  "trip_plan_not_found": "Reja topilmadi",
+  "enable_location": "Lokatsiyani yoqing",
+  "allow_location": "Lokatsiyaga ruxsat bering",
+  "balance": "Balans",
+  "promo_balance": "Promo balans",
+  "cash_balance": "Naqd balans",
+  "accept": "Qabul qilish",
+  "auto_offer": "Avto-taklif",
+  "orders": "Buyurtmalar",
+  "trip_history_title": "Safarlar tarixi",
+  "trip_history_empty": "Hozircha yakunlangan safarlar yo‘q. Ro‘yxat serverdan yuklanadi.",
+  "available_requests_title": "Mavjud buyurtmalar",
+  "available_requests_empty": "Hozircha navbatdagi buyurtmalar yo‘q.",
+  "available_requests_no_api": "Server manzili sozlanmagan.",
+  "available_requests_load_error": "Ro‘yxatni yuklab bo‘lmadi. Internetni tekshiring.",
+  "dist_to_pickup": "Mijozgacha",
+  "trip_route_km": "Safar",
+  "from_place": "Qayerdan",
+  "to_place": "Qayerga",
+  "parking_off": "To‘xtashda emas",
+  "commission_banner": "Buyurtmadan 5%",
+  "settings": "Sozlamalar",
+  "theme_title": "Ko‘rinish",
+  "theme_system": "Tizim",
+  "theme_light": "Yorug‘",
+  "theme_dark": "To‘q",
+  "language_title": "Til",
+  "language_option_latin": "Oʻzbekcha",
+  "language_option_cyrillic": "Ўзбекча",
+  "language_use_device": "Qurilma tili",
+  "referral_link_label": "Referal havolasi",
+  "copy_action": "Nusxa olish",
+  "copied_to_clipboard": "Havola buferga nusxalandi",
+  "sign_out": "Chiqish",
+  "call": "Qo‘ng‘iroq",
+  "trip_customer_label": "Mijoz",
+  "trip_price_label": "Narx",
+  "trip_distance_label": "Masofa",
+  "trip_map_stats_minutes": "{minutes} daqiqa",
+  "@trip_map_stats_minutes": {
+    "placeholders": {
+      "minutes": {
+        "type": "int"
+      }
+    }
+  },
+  "driver_id_title": "Haydovchi ID",
+  "driver_id_subtitle": "Ichki users.id yoki Telegram telegram_id (tasdiqlangan haydovchi). Admin / bot bilan bir xil.",
+  "driver_id_hint": "Masalan: 123456789",
+  "driver_id_save": "Saqlash",
+  "driver_id_error_empty": "ID kiritilmagan",
+  "driver_id_error_digits": "Faqat raqamlar: ichki users.id yoki Telegram ID",
+  "legal_acceptance_title": "Huquqiy hujjatlar",
+  "legal_acceptance_subtitle": "Davom etishdan oldin quyidagi shartlarni qabul qiling.",
+  "legal_acceptance_confirm": "Qabul qilaman",
+  "retry": "Qayta urinish",
+  "offline_api_failed": "Offline rejimga o‘tib bo‘lmadi. Internetni tekshirib, qayta urinib ko‘ring.",
+  "phone_login_title": "Kirish",
+  "phone_login_subtitle": "Telefon raqamingizni kiriting — SMS orqali kod yuboramiz.",
+  "phone_login_phone_hint": "Telefon raqami",
+  "phone_login_phone_required": "Telefon raqamini kiriting",
+  "phone_login_send_code": "Kod yuborish",
+  "not_registered_title": "Hali ro‘yxatdan o‘tmagansiz",
+  "not_registered_message": "Bu telefon raqam hozircha haydovchi sifatida ro‘yxatdan o‘tmagan. Davom etish uchun YettiQanot haydovchi boti orqali ro‘yxatdan o‘ting.",
+  "not_registered_telegram_button": "Telegram botda ro‘yxatdan o‘tish",
+  "not_registered_back": "Orqaga",
+  "phone_login_code_title": "Tasdiqlash kodi",
+  "phone_login_code_sent_to": "Kod yuborildi: {phone}",
+  "@phone_login_code_sent_to": {
+    "placeholders": {
+      "phone": {
+        "type": "String"
+      }
+    }
+  },
+  "phone_login_code_hint": "6 raqamli kod",
+  "phone_login_code_length": "6 raqamli kodni kiriting",
+  "phone_login_verify": "Tasdiqlash",
+  "phone_login_code_expires": "Kod amal qiladi: {time}",
+  "@phone_login_code_expires": {
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "phone_login_code_expired": "Kod muddati tugadi. Kodni qayta yuboring.",
+  "phone_login_resend": "Kodni qayta yuborish",
+  "phone_login_resend_in": "Qayta yuborish: {time}",
+  "@phone_login_resend_in": {
+    "placeholders": {
+      "time": {
+        "type": "String"
+      }
+    }
+  },
+  "phone_login_invalid_code": "Noto‘g‘ri kod",
+  "phone_login_network_error": "Tarmoq xatosi. Qayta urinib ko‘ring.",
+  "session_revoked_elsewhere": "Boshqa qurilmadan kirildi. Bu qurilmadan chiqarildingiz.",
+  "live_location_keep_app_gps": "Joylashuvni yangilab turish uchun ilovani ONLAYN qoldiring, GPS ruxsatini tekshiring va safarda ilovani uzoq yopmang yoki boshqa ilovada uzoq qolmang (tizim ~90 soniyada yangilanishni kutadi).",
+  "live_location_telegram_required": "Bu server sozlamasida faqat Telegram «jonli lokatsiya» qabul qilinadi. Haydovchi botida jonli lokatsiyani yoqing yoki serverda HTTP joylashuvini yoqing (ENABLE_DRIVER_HTTP_LIVE_LOCATION)."
+}

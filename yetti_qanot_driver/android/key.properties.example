@@ -1,0 +1,16 @@
+## Android release signing (Google Play upload key)
+#
+# Copy this file to `android/key.properties` and fill values.
+# DO NOT COMMIT `android/key.properties` or your `.jks`.
+#
+# Example:
+# storeFile=C:\\keys\\yettiqanot-upload.jks
+# storePassword=change_me
+# keyAlias=upload
+# keyPassword=change_me
+#
+storeFile=
+storePassword=
+keyAlias=
+keyPassword=
+
