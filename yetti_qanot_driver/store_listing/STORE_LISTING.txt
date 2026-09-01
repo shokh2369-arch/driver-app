@@ -1,0 +1,11 @@
+YettiQanot Driver — Google Play listing assets (generated)
+
+Files in this folder:
+  feature_graphic_1024x500.png  → Play Console → Main store listing → Feature graphic (1024 × 500)
+  icon_512x512.png              → Play Console → Main store listing → App icon (required 512×512 PNG, max 1 MB). Matches launcher + “DRIVER” label.
+  icon_512x512_gradient.png     → Optional marketing variant (not for Play upload)
+
+Phone screenshots (you must add yourself — use real app UI):
+  • Minimum 2 phone screenshots; shortest side between 320px and 3840px.
+  • Run the release build on a device/emulator, open key screens (login, home/map, trip), capture screenshots.
+  • Optional: flutter screenshot  (with a device connected and app in foreground)

@@ -1,0 +1,72 @@
+Release checklist — YettiQanot Driver
+====================================
+
+Version: see pubspec.yaml (versionName + versionCode after the +).
+
+1) Signing (required for Google Play)
+   - Copy android/key.properties.example to android/key.properties
+   - Point storeFile to your upload keystore; fill passwords and keyAlias
+   - Never commit key.properties or .jks / .keystore files
+
+2) Analyze
+   flutter pub get
+   flutter analyze
+
+3) Play Store bundle
+   flutter build appbundle
+
+   Output: build/app/outputs/bundle/release/app-release.aab
+
+4) Optional: production API / flags (examples)
+   flutter build appbundle --dart-define=API_BASE_URL=https://your-api.example.com
+
+4b) REQUIRED before a commercial release: third-party map services
+   The built-in defaults are shared community endpoints with usage restrictions.
+   Shipping them as-is risks rate-limiting, blocking, and licence violations.
+
+   - Routing defaults to the Project OSRM DEMO server
+     (https://router.project-osrm.org). Its usage policy is fair-use /
+     non-commercial only. Point it at your own OSRM instance:
+       --dart-define=OSRM_ROUTING_BASE_URL=https://osrm.your-domain.com
+     Set it to an empty string to disable road routing entirely (the map then
+     draws a straight driver→pickup segment and makes no routing requests).
+     A debug-build warning is logged while the demo server is still in use.
+
+   - Basemap tiles come from CARTO (basemaps.cartocdn.com), see
+     lib/features/home/presentation/widgets/osm_trip_map.dart. Confirm your
+     traffic volume is covered by a CARTO plan, or swap the TileLayer for a
+     provider you have rights to. Keep the "© OSM · © CARTO" attribution
+     visible either way — it is required by both licences.
+
+   - The API base URL defaults to a free-tier Render host
+     (https://taxi-2r2j.onrender.com), which sleeps when idle and cold-starts.
+     Override it for production with --dart-define=API_BASE_URL=...
+
+5) If `flutter build appbundle` ends with "failed to strip debug symbols" AFTER Gradle runs
+   Flutter 3.4x+ checks the .aab with `apkanalyzer` (needs SDK **cmdline-tools**). If that
+   tooling is missing, the check fails and prints the same message even when Gradle built OK.
+   Fix (do this first):
+   - Android Studio → Settings → Languages & Frameworks → Android SDK → SDK Tools tab
+   - Enable **Android SDK Command-line Tools (latest)** → Apply
+   - In a terminal: `flutter doctor --android-licenses` (accept all), then `flutter doctor -v`
+     and confirm Android toolchain has no X for cmdline-tools.
+   - `flutter build appbundle` again from your project folder.
+   If Gradle itself fails to strip (rare on Windows): short project path, short SDK path, or
+   build the AAB on Linux/macOS CI.
+
+5b) Copying the project to a short path (avoid Copy-Item errors)
+   Do NOT copy the `build` folder — paths become too long for Windows (MAX_PATH).
+   Best: from the repo root, `git clone` into `D:\src\yetti_qanot_driver`.
+   Or: in the source folder run `flutter clean`, then copy without caches (robocopy /XD
+   matches the *last* folder name only, not "android\.gradle"):
+     robocopy "D:\driver app\yetti_qanot_driver" "D:\src\yetti_qanot_driver" /E /XD build .dart_tool .gradle .kotlin
+   If the destination already has an extra nested folder `...\yetti_qanot_driver\yetti_qanot_driver\`, delete it (stale).
+   After copy, `cd D:\src\yetti_qanot_driver` and run `flutter pub get`.
+   Ensure `pubspec.yaml` is directly under `D:\src\yetti_qanot_driver` (not double-nested).
+
+6) Android SDK (flutter doctor)
+   Install "Android SDK Command-line Tools" in Android Studio (SDK Manager > SDK Tools).
+   Then: `flutter doctor --android-licenses` and accept all.
+
+7) Optional sideload APK (not for Play upload)
+   flutter build apk
