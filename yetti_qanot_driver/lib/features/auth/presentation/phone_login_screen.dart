@@ -140,6 +140,9 @@ class _PhoneLoginScreenState extends ConsumerState<PhoneLoginScreen> {
   }
 
   Future<void> _sendCode({bool isResend = false}) async {
+    // A SnackBar "retry" action can fire after login replaced this screen; never
+    // send a login code (or touch state) from a screen that is no longer mounted.
+    if (!mounted) return;
     // Single-flight: overlapping sends waste codes and (with the atomic lockout) attempts.
     if (_sending) return;
     final t = AppLocalizations.of(context);
@@ -217,6 +220,7 @@ class _PhoneLoginScreenState extends ConsumerState<PhoneLoginScreen> {
   }
 
   Future<void> _verify() async {
+    if (!mounted) return;
     // Single-flight: the 5-attempt lockout is atomic, so a double-fire burns an attempt and
     // consumes the code. Button + onSubmitted both funnel here.
     if (_verifying) return;
@@ -236,7 +240,12 @@ class _PhoneLoginScreenState extends ConsumerState<PhoneLoginScreen> {
     });
     try {
       final auth = await repo.verifyCode(_normalizedPhone, code);
-      if (mounted) ref.read(reachabilityProvider.notifier).markReachable();
+      if (mounted) {
+        ref.read(reachabilityProvider.notifier).markReachable();
+        // Failed-attempt SnackBars (with their retry callbacks) must not survive
+        // into the home screen.
+        ScaffoldMessenger.of(context).clearSnackBars();
+      }
       await ref.read(driverIdProvider.notifier).setDriverId(auth.driverId);
       final tok = auth.sessionToken?.trim();
       if (tok != null && tok.isNotEmpty) {
@@ -318,6 +327,9 @@ class _PhoneLoginScreenState extends ConsumerState<PhoneLoginScreen> {
   void _snack(String message, VoidCallback retry) {
     if (!mounted) return;
     final t = AppLocalizations.of(context);
+    // Replace, don't queue: each failed attempt used to enqueue another 4s SnackBar,
+    // so after a few retries the bar stayed on screen for minutes.
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),

@@ -7,13 +7,37 @@ import 'config.dart';
 
 class LocationService {
   Future<bool> ensureServiceEnabled() async {
+    if (AppConfig.mockLocation != null) return true;
     return Geolocator.isLocationServiceEnabled();
   }
 
-  Future<LocationPermission> checkPermission() => Geolocator.checkPermission();
+  Future<LocationPermission> checkPermission() => AppConfig.mockLocation != null
+      ? Future.value(LocationPermission.always)
+      : Geolocator.checkPermission();
 
   Future<LocationPermission> requestPermission() =>
-      Geolocator.requestPermission();
+      AppConfig.mockLocation != null
+          ? Future.value(LocationPermission.always)
+          : Geolocator.requestPermission();
+
+  /// Debug-only fixed position (see [AppConfig.mockLocation]) with a few metres
+  /// of drift so bearing / follow logic still gets exercised.
+  static Position _mockPosition(int tick) {
+    final m = AppConfig.mockLocation!;
+    final drift = (tick % 20) * 0.00003; // ≈ 3 m per tick, resets every 20 ticks
+    return Position(
+      latitude: m.lat + drift,
+      longitude: m.lng + drift,
+      timestamp: DateTime.now(),
+      accuracy: 8,
+      altitude: 0,
+      altitudeAccuracy: 0,
+      heading: 45,
+      headingAccuracy: 0,
+      speed: 4,
+      speedAccuracy: 0,
+    );
+  }
 
   /// Position stream.
   ///
@@ -32,6 +56,13 @@ class LocationService {
     String foregroundBody = 'Sizning lokatsiyangiz buyurtma uchun yoqilgan.',
     String foregroundChannelName = 'Driver location',
   }) {
+    if (AppConfig.mockLocation != null) {
+      var tick = 0;
+      return Stream<Position>.periodic(
+        const Duration(seconds: 2),
+        (_) => _mockPosition(tick++),
+      );
+    }
     return Geolocator.getPositionStream(
       locationSettings: _streamSettings(
         background: background,
@@ -43,6 +74,7 @@ class LocationService {
   }
 
   Future<Position> currentPosition() {
+    if (AppConfig.mockLocation != null) return Future.value(_mockPosition(0));
     final settings = LocationSettings(
       accuracy: AppConfig.debugLocation
           ? LocationAccuracy.bestForNavigation

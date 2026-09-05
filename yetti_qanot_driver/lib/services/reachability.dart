@@ -2,6 +2,7 @@ import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 
 import 'config.dart';
+import 'resilient_transport.dart';
 import 'internet_check.dart';
 
 /// Result of the login-screen reachability probe.
@@ -25,7 +26,7 @@ class ReachabilityService {
   ReachabilityService({
     http.Client? httpClient,
     Future<bool> Function()? internetProbe,
-  })  : _http = httpClient ?? http.Client(),
+  })  : _http = httpClient ?? createResilientHttpPackageClient(),
         _internetProbe = internetProbe ?? hasInternetConnection,
         _ownsClient = httpClient == null;
 

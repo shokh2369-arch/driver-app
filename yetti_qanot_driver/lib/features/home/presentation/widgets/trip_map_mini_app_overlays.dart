@@ -23,7 +23,9 @@ Color _tripCardMuted(ThemeData theme) => theme.brightness == Brightness.dark
     ? Colors.white.withValues(alpha: 0.62)
     : theme.colorScheme.onSurfaceVariant;
 
-/// Mini App–style rider block: Mijoz, phone, pickup coords, [Qo'ng'iroq].
+/// Rider block on the approach: Mijoz + phone on the left, [Qo'ng'iroq] and [Navigator]
+/// on the right. No raw coordinates — a driver cannot act on them; the map and the
+/// navigator button carry the where.
 class TripRiderInfoCard extends StatelessWidget {
   const TripRiderInfoCard({
     super.key,
@@ -53,10 +55,6 @@ class TripRiderInfoCard extends StatelessWidget {
     final theme = Theme.of(context);
     final phoneRaw = request.riderPhone?.trim();
     final phone = phoneRaw != null && phoneRaw.isNotEmpty ? _prettyPhone(phoneRaw) : '—';
-    final pickup = request.pickup;
-    final coord = pickup == null
-        ? t.coordinates_unavailable
-        : '${pickup.latitude.toStringAsFixed(5)}, ${pickup.longitude.toStringAsFixed(5)}';
 
     final cardBg = _tripCardSurface(theme);
     final onCard = _tripCardOnSurface(theme);
@@ -114,23 +112,6 @@ class TripRiderInfoCard extends StatelessWidget {
                       ),
                     ],
                   ),
-                  const SizedBox(height: 6),
-                  Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Icon(Icons.location_on_outlined, size: 18, color: Colors.red.shade400),
-                      const SizedBox(width: 6),
-                      Expanded(
-                        child: Text(
-                          coord,
-                          style: theme.textTheme.bodySmall?.copyWith(
-                            color: muted,
-                            fontFeatures: const [FontFeature.tabularFigures()],
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
                 ],
               ),
             ),
@@ -160,6 +141,26 @@ class TripRiderInfoCard extends StatelessWidget {
                       ),
                     ),
                   ),
+                  if (onNavigateToPickup != null) ...[
+                    const SizedBox(height: 8),
+                    SizedBox(
+                      width: double.infinity,
+                      child: FilledButton.icon(
+                        onPressed: onNavigateToPickup,
+                        icon: const Icon(Icons.navigation_rounded, size: 20, color: Colors.white),
+                        label: Text(
+                          t.navigate_to_pickup,
+                          style: const TextStyle(fontWeight: FontWeight.w700, color: Colors.white),
+                        ),
+                        style: FilledButton.styleFrom(
+                          backgroundColor: accentBlue,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                        ),
+                      ),
+                    ),
+                  ],
                 ],
               ),
             ),
@@ -170,11 +171,15 @@ class TripRiderInfoCard extends StatelessWidget {
   }
 }
 
-/// Floating pill: remaining km + ETA minutes (Mini App strip on the map).
-class TripMapStatsPill extends StatelessWidget {
-  const TripMapStatsPill({super.key, required this.trip, required this.driverPos});
+/// Two tiles below the map, above the action button. Phase-aware, never two dashes:
+/// on the way to the customer — distance to the pickup and the minutes it takes;
+/// once the ride is running — the live fare and the distance driven.
+class TripFareDistanceStrip extends StatelessWidget {
+  const TripFareDistanceStrip({super.key, required this.trip, this.driverPos});
 
   final TripState trip;
+
+  /// Driver position for the approach metrics; null → those tiles show a dash.
   final MapLatLng? driverPos;
 
   @override
@@ -184,89 +189,42 @@ class TripMapStatsPill extends StatelessWidget {
     final req = trip.activeRequest;
     if (req == null) return const SizedBox.shrink();
 
-    // Either endpoint may be absent when the backend omitted coordinates; fall back to
-    // the other one rather than showing a distance to a point we do not have.
-    final target = trip.status == TripStatus.started
-        ? (req.destination ?? req.pickup)
-        : (req.pickup ?? req.destination);
-    final km = (driverPos != null && target != null)
-        ? haversineKm(driverPos!, target)
-        : null;
-    final minutes = km != null ? (km / 30.0) * 60.0 : null;
-    final minRounded = minutes?.round().clamp(0, 9999);
-
-    final isDark = theme.brightness == Brightness.dark;
-    final pillBg = isDark ? IosTokens.darkBackground : theme.colorScheme.surface.withValues(alpha: 0.97);
-    final onPill = isDark ? Colors.white.withValues(alpha: 0.95) : theme.colorScheme.onSurface;
-    final muted = isDark ? Colors.white.withValues(alpha: 0.55) : theme.colorScheme.onSurfaceVariant;
-
-    return Center(
-      child: Material(
-        elevation: isDark ? 0 : 2,
-        color: pillBg,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(999),
-          side: BorderSide(
-            color: isDark ? Colors.white.withValues(alpha: 0.1) : theme.dividerColor.withValues(alpha: 0.4),
-          ),
-        ),
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(Icons.place_outlined, size: 18, color: Colors.red.shade400),
-              const SizedBox(width: 6),
-              Text(
-                km != null ? formatKm(km) : '—',
-                style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w800, color: onPill),
-              ),
-              Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 14),
-                child: Container(
-                  width: 1,
-                  height: 18,
-                  color: isDark ? Colors.white.withValues(alpha: 0.2) : theme.dividerColor,
-                ),
-              ),
-              Icon(Icons.schedule, size: 18, color: muted),
-              const SizedBox(width: 6),
-              Text(
-                minRounded != null ? t.trip_map_stats_minutes(minRounded) : '—',
-                style: theme.textTheme.titleSmall?.copyWith(fontWeight: FontWeight.w700, color: onPill),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-/// Two tiles: Narx | Masofa (below map, above action buttons).
-class TripFareDistanceStrip extends StatelessWidget {
-  const TripFareDistanceStrip({super.key, required this.trip});
-
-  final TripState trip;
-
-  @override
-  Widget build(BuildContext context) {
-    final t = AppLocalizations.of(context);
-    final theme = Theme.of(context);
-    final req = trip.activeRequest;
-    if (req == null) return const SizedBox.shrink();
-
     final preStart = trip.status == TripStatus.waiting || trip.status == TripStatus.arrived;
-    final price = preStart
-        ? '—'
-        : formatDisplayFareSom(req.fareSom, suffix: t.currency_som);
-    final distKm = (req.distanceKm != null && req.distanceKm! > 0)
-        ? req.distanceKm!
-        : (trip.clientOdometerKm > 0 ? trip.clientOdometerKm : null);
-    final dist = preStart
-        ? '—'
-        : (distKm != null ? '${distKm.toStringAsFixed(1)} km' : '—');
+
+    final IconData leftIcon;
+    final IconData rightIcon;
+    final String leftLabel;
+    final String leftValue;
+    final String rightLabel;
+    final String rightValue;
+    if (preStart) {
+      final pickup = req.pickup;
+      final km = (driverPos != null && pickup != null) ? haversineKm(driverPos!, pickup) : null;
+      // Same rough city speed the offer card quotes, so the two numbers agree.
+      final minutes = km != null ? (km / 30.0) * 60.0 : null;
+      leftIcon = Icons.place_outlined;
+      leftLabel = t.dist_to_pickup;
+      leftValue = formatKm(km);
+      rightIcon = Icons.schedule;
+      rightLabel = t.eta_short;
+      rightValue = minutes != null
+          ? t.trip_map_stats_minutes(minutes.round().clamp(0, 9999))
+          : '—';
+    } else {
+      final estimated = req.estimatedPriceSom;
+      leftIcon = Icons.payments_outlined;
+      leftLabel = t.trip_price_label;
+      // Until the server's metered fare arrives, the estimate from the offer beats a dash.
+      leftValue = req.fareSom != null
+          ? formatDisplayFareSom(req.fareSom, suffix: t.currency_som)
+          : (estimated > 0 ? formatSomInt(estimated, suffix: t.currency_som) : '—');
+      final distKm = (req.distanceKm != null && req.distanceKm! > 0)
+          ? req.distanceKm!
+          : (trip.clientOdometerKm > 0 ? trip.clientOdometerKm : null);
+      rightIcon = Icons.straighten;
+      rightLabel = t.trip_distance_label;
+      rightValue = distKm != null ? '${distKm.toStringAsFixed(1)} km' : '—';
+    }
 
     final cardBg = _tripCardSurface(theme);
     final onCard = _tripCardOnSurface(theme);
@@ -323,9 +281,9 @@ class TripFareDistanceStrip extends StatelessWidget {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        tile(icon: Icons.payments_outlined, label: t.trip_price_label, value: price),
+        tile(icon: leftIcon, label: leftLabel, value: leftValue),
         const SizedBox(width: 10),
-        tile(icon: Icons.straighten, label: t.trip_distance_label, value: dist),
+        tile(icon: rightIcon, label: rightLabel, value: rightValue),
       ],
     );
   }

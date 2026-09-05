@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 
 import 'api_error_parser.dart';
 import 'config.dart';
+import 'resilient_transport.dart';
 
 typedef DriverForbiddenHandler = void Function(DioException error);
 typedef DriverSessionRevokedHandler = void Function();
@@ -45,6 +46,9 @@ class DriverApiClient {
         headers: {'Content-Type': 'application/json'},
       ),
     );
+    // Native: sticky, raced edge-address connections (one dead Render/Cloudflare
+    // IP must not turn every request into a coin toss). No-op on web.
+    withResilientTransport(dio);
     dio.interceptors.add(
       InterceptorsWrapper(
         onRequest: (options, handler) {

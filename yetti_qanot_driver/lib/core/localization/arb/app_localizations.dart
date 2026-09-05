@@ -856,7 +856,7 @@ abstract class AppLocalizations {
   /// No description provided for @commission_rate.
   ///
   /// In uz, this message translates to:
-  /// **'Buyurtmadan {rate}%'**
+  /// **'Komissiya: har buyurtmadan {rate}%'**
   String commission_rate(String rate);
 
   /// No description provided for @commission_off.
@@ -918,6 +918,30 @@ abstract class AppLocalizations {
   /// In uz, this message translates to:
   /// **'Qayta tekshirish'**
   String get awaiting_approval_check_again;
+
+  /// No description provided for @navigate_to_pickup.
+  ///
+  /// In uz, this message translates to:
+  /// **'Navigator'**
+  String get navigate_to_pickup;
+
+  /// No description provided for @to_destination.
+  ///
+  /// In uz, this message translates to:
+  /// **'Manzilgacha'**
+  String get to_destination;
+
+  /// No description provided for @eta_short.
+  ///
+  /// In uz, this message translates to:
+  /// **'Yetib borish'**
+  String get eta_short;
+
+  /// No description provided for @waiting_for_orders.
+  ///
+  /// In uz, this message translates to:
+  /// **'Buyurtma kutilmoqda'**
+  String get waiting_for_orders;
 }
 
 class _AppLocalizationsDelegate

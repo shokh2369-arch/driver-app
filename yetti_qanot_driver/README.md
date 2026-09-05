@@ -66,6 +66,16 @@ All optional overrides are compile-time flags:
 | `DRIVER_TRIP_HISTORY_HTTP_PATH` | Optional **`GET`** path for trip history (default **`/driver/trips`** in the app when unset). |
 | `ENABLE_DRIVER_DISPATCH_POKE_WS` | Enable/disable dispatch “poke” WebSocket **`GET /ws/driver-dispatch`**; when enabled the app immediately refetches **`GET /driver/available-requests`** on `dispatch_changed`. Default: `true`. |
 | `OSRM_ROUTING_BASE_URL` | OSRM-compatible **routing** origin (no path), default `https://router.project-osrm.org`. Set **empty** to skip routing HTTP and use a straight pickup→drop line. Use your own host if the demo blocks **web** CORS. |
+| `MAP_TILE_URL_TEMPLATE` | Raster basemap tile URL template (`{z}/{x}/{y}`, optional `{s}`). Default: OpenStreetMap tile API `https://tile.openstreetmap.org/{z}/{x}/{y}.png` — fine for light use with attribution; use your own tile server for a production fleet (OSM tile usage policy). |
+| `MAP_TILE_FALLBACK_URL_TEMPLATE` | Per-tile fallback when the primary tile keeps failing after 2 retries (the public OSM service answers whole bursts with 503 at times). Default: the German OSM community mirror `tile.openstreetmap.de`. Set empty to disable. |
+| `MOCK_LOCATION` | **Debug builds only.** `lat,lng` — fixed GPS fix with slight drift, permission reported as granted. Combine with an empty `API_BASE_URL` to exercise the trip map in mock mode on a machine/browser profile without location access. |
+
+> **Web testing on networks that blackhole a Render edge IP.** The backend host resolves to two Cloudflare/Render IPs; on some networks one is silently dropped for minutes at a time and Chrome keeps using it. The native app copes (`lib/services/resilient_http_client_io.dart` races both addresses); Chrome cannot. For Flutter **web** runs, start the dev proxy and point the app at it:
+>
+> ```bash
+> dart --packages=.dart_tool/package_config.json tool/dev_api_proxy.dart https://taxi-2866.onrender.com 8787
+> flutter run -d web-server --web-port=8765 --dart-define=API_BASE_URL=http://localhost:8787
+> ```
 
 **Examples**
 
@@ -178,7 +188,7 @@ docs/
 State management: **Riverpod 2** (`NotifierProvider`, `Provider`).
 
 HTTP: **Dio** with interceptors (auth headers, legal 403 handling).  
-Maps: **flutter_map** + **CARTO Voyager** raster tiles (OpenStreetMap data, CDN-friendly for web); trip line follows roads via **OSRM** (`lib/services/osrm_route_client.dart`, overridable with `OSRM_ROUTING_BASE_URL`).
+Maps: **flutter_map** + **OpenStreetMap** raster tiles (`tile.openstreetmap.org`, override with `MAP_TILE_URL_TEMPLATE`; CDN-friendly for web); trip line follows roads via **OSRM** (`lib/services/osrm_route_client.dart`, overridable with `OSRM_ROUTING_BASE_URL`).
 
 ---
 

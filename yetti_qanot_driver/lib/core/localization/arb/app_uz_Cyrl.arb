@@ -133,7 +133,7 @@
   "balance_low_warning": "Баланс тугаб қолмоқда. Буюртмалар тўхтамаслиги учун балансни тўлдиринг.",
   "balance_empty_orders_paused": "Баланс тугади — янги буюртмалар тўхтатилди. Тўлдириш учун диспетчерга мурожаат қилинг.",
   "contact_support": "Диспетчерга қўнғироқ",
-  "commission_rate": "Буюртмадан {rate}%",
+  "commission_rate": "Комиссия: ҳар буюртмадан {rate}%",
   "@commission_rate": {
     "placeholders": {
       "rate": {
@@ -150,5 +150,9 @@
   "phone_login_have_code": "Кодим бор",
   "awaiting_approval_title": "Тасдиқлаш кутилмоқда",
   "awaiting_approval_message": "Аризангиз кўриб чиқилмоқда. Ҳисобингиз тасдиқлангач, иловага кира оласиз. Тасдиқлаш одатда иш кунида амалга оширилади.",
-  "awaiting_approval_check_again": "Қайта текшириш"
+  "awaiting_approval_check_again": "Қайта текшириш",
+  "navigate_to_pickup": "Навигатор",
+  "to_destination": "Манзилгача",
+  "eta_short": "Етиб бориш",
+  "waiting_for_orders": "Буюртма кутилмоқда"
 }

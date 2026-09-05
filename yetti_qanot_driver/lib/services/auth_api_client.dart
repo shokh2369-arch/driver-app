@@ -3,6 +3,7 @@ import 'package:flutter/foundation.dart';
 
 import 'api_error_parser.dart';
 import 'config.dart';
+import 'resilient_transport.dart';
 
 /// Result of [AuthApiClient.verifyCode] — [sessionToken] is optional until the backend issues sessions.
 class PhoneAuthResult {
@@ -20,7 +21,7 @@ class AuthApiClient {
 
   static Dio _createDio() {
     final base = AppConfig.apiBaseUrl;
-    return Dio(
+    final dio = Dio(
       BaseOptions(
         baseUrl: base.endsWith('/') ? base.substring(0, base.length - 1) : base,
         // Explicit ~10 s ceiling on every auth call: the driver must not wait ~15 s per tap
@@ -31,6 +32,8 @@ class AuthApiClient {
         headers: {'Content-Type': 'application/json'},
       ),
     );
+    // Native: sticky, raced edge-address connections; no-op on web.
+    return withResilientTransport(dio);
   }
 
   /// E.164-friendly: `+998…` or `998…` or a 9-digit Uzbek mobile (`9XXXXXXXX`) → `+998…`.

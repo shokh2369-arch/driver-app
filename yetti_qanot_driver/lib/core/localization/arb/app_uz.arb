@@ -154,7 +154,7 @@
   "balance_low_warning": "Balans tugab qolmoqda. Buyurtmalar to‘xtamasligi uchun balansni to‘ldiring.",
   "balance_empty_orders_paused": "Balans tugadi — yangi buyurtmalar to‘xtatildi. To‘ldirish uchun dispetcherga murojaat qiling.",
   "contact_support": "Dispetcherga qo‘ng‘iroq",
-  "commission_rate": "Buyurtmadan {rate}%",
+  "commission_rate": "Komissiya: har buyurtmadan {rate}%",
   "@commission_rate": {
     "placeholders": {
       "rate": {
@@ -171,5 +171,9 @@
   "phone_login_have_code": "Kodim bor",
   "awaiting_approval_title": "Tasdiqlash kutilmoqda",
   "awaiting_approval_message": "Arizangiz ko‘rib chiqilmoqda. Hisobingiz tasdiqlangach, ilovaga kira olasiz. Tasdiqlash odatda ish kunida amalga oshiriladi.",
-  "awaiting_approval_check_again": "Qayta tekshirish"
+  "awaiting_approval_check_again": "Qayta tekshirish",
+  "navigate_to_pickup": "Navigator",
+  "to_destination": "Manzilgacha",
+  "eta_short": "Yetib borish",
+  "waiting_for_orders": "Buyurtma kutilmoqda"
 }

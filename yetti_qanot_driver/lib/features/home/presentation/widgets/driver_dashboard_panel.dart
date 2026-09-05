@@ -38,6 +38,7 @@ class DriverDashboardPanel extends StatelessWidget {
     this.onPendingOfferTimeout,
     this.pendingOfferExpiresAt,
     this.commission,
+    this.online = false,
   });
 
   final String promoValue;
@@ -76,6 +77,10 @@ class DriverDashboardPanel extends StatelessWidget {
   /// backend). Never a hardcoded or guessed rate — it's deducted from the wallet.
   final CommissionInfo? commission;
 
+  /// Driver is ONLINE. With no offer on screen the dashboard says it is listening —
+  /// otherwise an empty panel reads as "the app stopped".
+  final bool online;
+
   static const _radius = 18.0;
   static const _gap = 12.0;
 
@@ -108,8 +113,10 @@ class DriverDashboardPanel extends StatelessWidget {
         ),
         const SizedBox(height: _gap),
 
-        // 2. The money moment (offer) or resume-trip — or, when idle, the two work tiles.
-        if (hasInlineOffer)
+        // 2. The money moment (offer) or resume-trip sits ABOVE the two work tiles, never
+        //    in their place: Buyurtmalar and Safarlar tarixi must stay reachable while an
+        //    offer counts down.
+        if (hasInlineOffer) ...[
           _OfferCard(
             palette: palette,
             radius: _radius,
@@ -122,8 +129,9 @@ class DriverDashboardPanel extends StatelessWidget {
               acceptLabel: acceptOfferLabel!,
               onOfferTimeout: onPendingOfferTimeout,
             ),
-          )
-        else if (hasUnfinishedTrip)
+          ),
+          const SizedBox(height: _gap),
+        ] else if (hasUnfinishedTrip) ...[
           _Card(
             palette: palette,
             radius: _radius,
@@ -132,36 +140,38 @@ class DriverDashboardPanel extends StatelessWidget {
               status: unfinishedTripStatus!,
               onContinue: onContinueUnfinishedTrip!,
             ),
-          )
-        else
-          IntrinsicHeight(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Expanded(
-                  child: _WorkTile(
-                    palette: palette,
-                    icon: Icons.hail_rounded,
-                    label: t.orders,
-                    onTap: onAvailableRequestsTap,
-                  ),
-                ),
-                const SizedBox(width: _gap),
-                Expanded(
-                  child: _WorkTile(
-                    palette: palette,
-                    icon: Icons.receipt_long_rounded,
-                    label: t.trip_history_title,
-                    onTap: onTripHistoryTap,
-                  ),
-                ),
-              ],
-            ),
           ),
+          const SizedBox(height: _gap),
+        ],
+        IntrinsicHeight(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                child: _WorkTile(
+                  palette: palette,
+                  icon: Icons.hail_rounded,
+                  label: t.orders,
+                  onTap: onAvailableRequestsTap,
+                ),
+              ),
+              const SizedBox(width: _gap),
+              Expanded(
+                child: _WorkTile(
+                  palette: palette,
+                  icon: Icons.receipt_long_rounded,
+                  label: t.trip_history_title,
+                  onTap: onTripHistoryTap,
+                ),
+              ),
+            ],
+          ),
+        ),
         const SizedBox(height: _gap),
 
-        // 3. Standing info, demoted to quiet strips. Commission is not a headline, and the
-        //    parking flag is a status line — neither should compete with money or offers.
+        // 3. Standing info, demoted to quiet strips: the commission rate and, while ONLINE
+        //    with nothing on offer, a steady "waiting for orders" lamp. Neither competes
+        //    with money or offers.
         // Commission is admin-editable and money-relevant, so the row shows the real
         // backend value, "no commission" when it's off/0, or nothing at all when the
         // backend hasn't sent it — never a guessed number.
@@ -175,11 +185,12 @@ class DriverDashboardPanel extends StatelessWidget {
           ),
           const SizedBox(height: _gap),
         ],
-        _InfoStrip(
-          palette: palette,
-          leading: _ParkingChip(palette: palette),
-          text: t.parking_off,
-        ),
+        if (online && !hasInlineOffer && !hasUnfinishedTrip)
+          _InfoStrip(
+            palette: palette,
+            leading: _LiveDot(color: palette.money),
+            text: t.waiting_for_orders,
+          ),
       ],
     );
   }
@@ -514,27 +525,25 @@ class _InfoStrip extends StatelessWidget {
   }
 }
 
-class _ParkingChip extends StatelessWidget {
-  const _ParkingChip({required this.palette});
+/// Steady status lamp for a quiet strip — the same idiom as the trip status banner.
+class _LiveDot extends StatelessWidget {
+  const _LiveDot({required this.color});
 
-  final _DashPalette palette;
+  final Color color;
 
   @override
   Widget build(BuildContext context) {
-    return Container(
-      width: 22,
-      height: 22,
-      decoration: BoxDecoration(
-        border: Border.all(color: palette.muted, width: 1.6),
-        borderRadius: BorderRadius.circular(6),
-      ),
+    return SizedBox(
+      width: 20,
+      height: 20,
       child: Center(
-        child: Text(
-          'P',
-          style: TextStyle(
-            color: palette.muted,
-            fontWeight: FontWeight.w800,
-            fontSize: 13,
+        child: Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            color: color,
+            shape: BoxShape.circle,
+            boxShadow: [BoxShadow(blurRadius: 6, color: color.withValues(alpha: 0.6))],
           ),
         ),
       ),
@@ -542,8 +551,6 @@ class _ParkingChip extends StatelessWidget {
   }
 }
 
-/// The one bold element: a live incoming offer. Filled green (money/go) so it is
-/// unmistakable against the otherwise-neutral panel.
 class _OfferCard extends StatelessWidget {
   const _OfferCard({
     required this.palette,

@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../../core/formatting/money_uzs.dart';
 import '../../../core/geo/lat_lng.dart';
 import '../../../core/localization/arb/app_localizations.dart';
+import '../../../core/theme/ios_tokens.dart';
 import '../../../services/config.dart';
 import '../../../services/driver_dispatch_parser.dart';
 import '../../../services/driver_user_exception.dart';
@@ -12,6 +15,11 @@ import '../../trip/presentation/trip_controller.dart';
 import '../../trip/presentation/widgets/distance_utils.dart';
 
 /// Lists queue rows from `GET /driver/available-requests` with distance (API or haversine from [driverPosition]).
+///
+/// The list is **live**: it re-fetches every second while the screen is open, so new
+/// orders appear and taken ones vanish without a pull-to-refresh. The refresh is
+/// single-flight and only rebuilds the list when the rows actually changed, so it is
+/// invisible unless there is news; a failed tick keeps the last good list on screen.
 class AvailableRequestsScreen extends ConsumerStatefulWidget {
   const AvailableRequestsScreen({super.key, this.driverPosition});
 
@@ -22,13 +30,28 @@ class AvailableRequestsScreen extends ConsumerStatefulWidget {
 }
 
 class _AvailableRequestsScreenState extends ConsumerState<AvailableRequestsScreen> {
-  late Future<List<QueueOfferItem>> _future;
+  static const Duration _refreshEvery = Duration(seconds: 1);
+
+  /// `null` until the first fetch answers; then always the last good list.
+  List<QueueOfferItem>? _items;
+
+  /// Only surfaced while there is no list to show yet.
+  Object? _error;
+  bool _inFlight = false;
+  Timer? _timer;
   String? _acceptingRequestId;
 
   @override
   void initState() {
     super.initState();
-    _future = _load();
+    unawaited(_tick());
+    _timer = Timer.periodic(_refreshEvery, (_) => unawaited(_tick()));
+  }
+
+  @override
+  void dispose() {
+    _timer?.cancel();
+    super.dispose();
   }
 
   Future<List<QueueOfferItem>> _load() async {
@@ -39,21 +62,75 @@ class _AvailableRequestsScreenState extends ConsumerState<AvailableRequestsScree
     return parseAvailableRequests(raw).queueItems;
   }
 
-  String _distanceLine(QueueOfferItem item) {
-    final dk = item.distanceKm;
-    if (dk != null && dk > 0) {
-      return formatKm(dk);
+  /// One refresh: at most one request in flight, and no list reshuffle under a
+  /// finger that is mid-accept.
+  Future<void> _tick() async {
+    if (_inFlight || !mounted || _acceptingRequestId != null) return;
+    _inFlight = true;
+    try {
+      final items = _sortNearestFirst(await _load());
+      if (!mounted) return;
+      final current = _items;
+      if (current == null || _error != null || !_sameRows(current, items)) {
+        setState(() {
+          _items = items;
+          _error = null;
+        });
+      }
+    } catch (e) {
+      if (mounted && _items == null) setState(() => _error = e);
+    } finally {
+      _inFlight = false;
     }
-    final me = widget.driverPosition;
-    return me != null ? formatKm(haversineKm(me, item.pickup)) : formatKm(null);
   }
 
-  Future<void> _refresh() async {
-    setState(() {
-      _future = _load();
-    });
-    await _future;
+  static bool _sameRows(List<QueueOfferItem> a, List<QueueOfferItem> b) {
+    if (a.length != b.length) return false;
+    for (var i = 0; i < a.length; i++) {
+      if (_rowKey(a[i]) != _rowKey(b[i])) return false;
+    }
+    return true;
   }
+
+  static String _rowKey(QueueOfferItem q) =>
+      '${q.requestId}|${q.distanceKm}|${q.estimatedPriceSom}|'
+      '${q.pickup.latitude},${q.pickup.longitude}';
+
+  /// Distance to the pickup: the server's figure when it sent one, else straight-line
+  /// from the driver's position, else unknown.
+  double? _kmTo(QueueOfferItem item) {
+    final dk = item.distanceKm;
+    if (dk != null && dk > 0) return dk;
+    final me = widget.driverPosition;
+    return me != null ? haversineKm(me, item.pickup) : null;
+  }
+
+  String _distanceLine(QueueOfferItem item) => formatKm(_kmTo(item));
+
+  /// Minutes to reach the customer at the same rough city speed the offer card uses.
+  String _etaLine(QueueOfferItem item, AppLocalizations t) {
+    final km = _kmTo(item);
+    if (km == null) return '—';
+    return t.trip_map_stats_minutes((km / 30.0 * 60.0).round().clamp(0, 9999));
+  }
+
+  /// Nearest first — that is how a driver reads the list. Rows with no known distance
+  /// keep the server's order at the end. Stable, so unchanged data never reshuffles.
+  List<QueueOfferItem> _sortNearestFirst(List<QueueOfferItem> items) {
+    final indexed = items.asMap().entries.toList()
+      ..sort((a, b) {
+        final ka = _kmTo(a.value);
+        final kb = _kmTo(b.value);
+        if (ka == null && kb == null) return a.key.compareTo(b.key);
+        if (ka == null) return 1;
+        if (kb == null) return -1;
+        final c = ka.compareTo(kb);
+        return c != 0 ? c : a.key.compareTo(b.key);
+      });
+    return [for (final e in indexed) e.value];
+  }
+
+  Future<void> _refresh() => _tick();
 
   String _acceptErrorMessage(DriverUserException e, AppLocalizations t) {
     switch (e.userCode) {
@@ -131,13 +208,13 @@ class _AvailableRequestsScreenState extends ConsumerState<AvailableRequestsScree
 
     return Scaffold(
       appBar: AppBar(title: Text(t.available_requests_title)),
-      body: FutureBuilder<List<QueueOfferItem>>(
-        future: _future,
-        builder: (context, snapshot) {
-          if (snapshot.connectionState == ConnectionState.waiting) {
+      body: Builder(
+        builder: (context) {
+          final items = _items;
+          if (items == null && _error == null) {
             return const Center(child: CircularProgressIndicator());
           }
-          if (snapshot.hasError) {
+          if (items == null) {
             return Center(
               child: Padding(
                 padding: const EdgeInsets.all(24),
@@ -161,7 +238,6 @@ class _AvailableRequestsScreenState extends ConsumerState<AvailableRequestsScree
               ),
             );
           }
-          final items = snapshot.data ?? [];
           if (items.isEmpty) {
             return RefreshIndicator(
               onRefresh: _refresh,
@@ -202,38 +278,70 @@ class _AvailableRequestsScreenState extends ConsumerState<AvailableRequestsScree
                           Row(
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              CircleAvatar(
-                                backgroundColor: theme.colorScheme.primaryContainer,
-                                child: Icon(Icons.place_outlined, color: theme.colorScheme.onPrimaryContainer),
-                              ),
-                              const SizedBox(width: 12),
-                              const Spacer(),
-                              Column(
-                                crossAxisAlignment: CrossAxisAlignment.end,
-                                children: [
-                                  Text(
-                                    t.trip_distance_label,
-                                    style: theme.textTheme.labelSmall?.copyWith(
-                                      color: theme.colorScheme.onSurfaceVariant,
-                                    ),
-                                  ),
-                                  Text(
-                                    _distanceLine(item),
-                                    style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
-                                  ),
-                                  if (item.estimatedPriceSom > 0) ...[
-                                    const SizedBox(height: 4),
+                              // Left: how far and how long to the customer — the two numbers a
+                              // driver weighs before accepting.
+                              Expanded(
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
                                     Text(
-                                      '💰 ${t.estimated_price_label}: '
-                                      '${formatSomInt(item.estimatedPriceSom, suffix: t.currency_som)}',
-                                      textAlign: TextAlign.right,
+                                      t.dist_to_pickup,
                                       style: theme.textTheme.labelSmall?.copyWith(
                                         color: theme.colorScheme.onSurfaceVariant,
                                       ),
                                     ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      _distanceLine(item),
+                                      style: theme.textTheme.headlineSmall?.copyWith(
+                                        fontWeight: FontWeight.w900,
+                                        fontFeatures: const [FontFeature.tabularFigures()],
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Row(
+                                      children: [
+                                        Icon(
+                                          Icons.schedule,
+                                          size: 16,
+                                          color: theme.colorScheme.onSurfaceVariant,
+                                        ),
+                                        const SizedBox(width: 4),
+                                        Text(
+                                          _etaLine(item, t),
+                                          style: theme.textTheme.bodySmall?.copyWith(
+                                            color: theme.colorScheme.onSurfaceVariant,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
                                   ],
-                                ],
+                                ),
                               ),
+                              // Right: the money, in the same green the balance uses.
+                              if (item.estimatedPriceSom > 0)
+                                Column(
+                                  crossAxisAlignment: CrossAxisAlignment.end,
+                                  children: [
+                                    Text(
+                                      t.estimated_price_label,
+                                      style: theme.textTheme.labelSmall?.copyWith(
+                                        color: theme.colorScheme.onSurfaceVariant,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 2),
+                                    Text(
+                                      formatSomInt(item.estimatedPriceSom, suffix: t.currency_som),
+                                      style: theme.textTheme.titleLarge?.copyWith(
+                                        fontWeight: FontWeight.w900,
+                                        color: theme.brightness == Brightness.dark
+                                            ? IosTokens.systemGreenDark
+                                            : IosTokens.systemGreen,
+                                        fontFeatures: const [FontFeature.tabularFigures()],
+                                      ),
+                                    ),
+                                  ],
+                                ),
                             ],
                           ),
                           const SizedBox(height: 12),

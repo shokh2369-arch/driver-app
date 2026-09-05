@@ -430,7 +430,7 @@ class AppLocalizationsUz extends AppLocalizations {
 
   @override
   String commission_rate(String rate) {
-    return 'Buyurtmadan $rate%';
+    return 'Komissiya: har buyurtmadan $rate%';
   }
 
   @override
@@ -466,6 +466,18 @@ class AppLocalizationsUz extends AppLocalizations {
 
   @override
   String get awaiting_approval_check_again => 'Qayta tekshirish';
+
+  @override
+  String get navigate_to_pickup => 'Navigator';
+
+  @override
+  String get to_destination => 'Manzilgacha';
+
+  @override
+  String get eta_short => 'Yetib borish';
+
+  @override
+  String get waiting_for_orders => 'Buyurtma kutilmoqda';
 }
 
 /// The translations for Uzbek, using the Cyrillic script (`uz_Cyrl`).
@@ -890,7 +902,7 @@ class AppLocalizationsUzCyrl extends AppLocalizationsUz {
 
   @override
   String commission_rate(String rate) {
-    return 'Буюртмадан $rate%';
+    return 'Комиссия: ҳар буюртмадан $rate%';
   }
 
   @override
@@ -926,4 +938,16 @@ class AppLocalizationsUzCyrl extends AppLocalizationsUz {
 
   @override
   String get awaiting_approval_check_again => 'Қайта текшириш';
+
+  @override
+  String get navigate_to_pickup => 'Навигатор';
+
+  @override
+  String get to_destination => 'Манзилгача';
+
+  @override
+  String get eta_short => 'Етиб бориш';
+
+  @override
+  String get waiting_for_orders => 'Буюртма кутилмоқда';
 }

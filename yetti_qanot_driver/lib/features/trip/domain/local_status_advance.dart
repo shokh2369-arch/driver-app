@@ -33,6 +33,9 @@ class LocalStatusAdvance {
   /// The optimistic status currently being held, if any.
   TripStatus? get status => _status;
 
+  /// Trip the held [status] belongs to, if any.
+  String? get tripId => _tripId;
+
   bool get isActive => _status != null;
 
   /// Record a driver-tapped status for [tripId].

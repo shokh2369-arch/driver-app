@@ -79,9 +79,9 @@ Future<void> launchOrNotify(
     debugPrint('[yetti_driver] launchUrl failed for ${uri.scheme}: $e');
   }
   if (ok || !context.mounted) return;
-  ScaffoldMessenger.of(context).showSnackBar(
-    SnackBar(content: Text(failureMessage)),
-  );
+  ScaffoldMessenger.of(
+    context,
+  ).showSnackBar(SnackBar(content: Text(failureMessage)));
 }
 
 class HomeScreen extends ConsumerStatefulWidget {
@@ -97,6 +97,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   StreamSubscription<Position>? _posSub;
   bool _posSubBackground = false;
   bool _locationErrorShown = false;
+
+  /// Trip panel folded down to the primary action only (more map).
+  bool _tripPanelCollapsed = false;
   MapLatLng? _me;
   Timer? _meUiThrottle;
   MapLatLng? _pendingMeUi;
@@ -181,7 +184,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final hasLink = linkTrimmed != null && linkTrimmed.isNotEmpty;
     final detail = AppConfig.hasHttpApi
         ? '${t.promo_balance}: ${formatUzsSomOrDash(b?.promoSom, suffix: t.currency_som)}\n'
-            '${t.cash_balance}: ${formatUzsSomOrDash(b?.cashSom, suffix: t.currency_som)}'
+              '${t.cash_balance}: ${formatUzsSomOrDash(b?.cashSom, suffix: t.currency_som)}'
         : '—';
     await showModalBottomSheet<void>(
       context: context,
@@ -396,18 +399,20 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     if (!mounted) return;
     final service = ref.read(locationServiceProvider);
     try {
-      _posSub = service.positionStream(background: background).listen(
-        _ingestGps,
-        // Revoked permission or a disabled location service arrives as a stream error.
-        // Without a handler it becomes an unhandled async exception and the driver is
-        // left with a stream that quietly stopped producing fixes.
-        onError: (Object e, StackTrace st) {
-          debugPrint('[yetti_driver] location stream error: $e');
-          _onLocationStreamFailed();
-        },
-        onDone: _onLocationStreamFailed,
-        cancelOnError: false,
-      );
+      _posSub = service
+          .positionStream(background: background)
+          .listen(
+            _ingestGps,
+            // Revoked permission or a disabled location service arrives as a stream error.
+            // Without a handler it becomes an unhandled async exception and the driver is
+            // left with a stream that quietly stopped producing fixes.
+            onError: (Object e, StackTrace st) {
+              debugPrint('[yetti_driver] location stream error: $e');
+              _onLocationStreamFailed();
+            },
+            onDone: _onLocationStreamFailed,
+            cancelOnError: false,
+          );
       _posSubBackground = background;
     } catch (e) {
       debugPrint('[yetti_driver] location stream subscribe failed: $e');
@@ -421,7 +426,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     if (_locationErrorShown) return;
     _locationErrorShown = true;
     ScaffoldMessenger.maybeOf(context)?.showSnackBar(
-      SnackBar(content: Text(AppLocalizations.of(context).location_stream_error)),
+      SnackBar(
+        content: Text(AppLocalizations.of(context).location_stream_error),
+      ),
     );
     // Re-check the permission gate so the driver gets the actionable screen.
     unawaited(ref.read(locationGateProvider.notifier).refresh());
@@ -440,8 +447,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   ) {
     if (identical(a, b)) return true;
     if (a == null || b == null) return false;
+    // Same trip → same summary, even if a later source filled in other numbers.
+    if (a.tripId != null && a.tripId == b.tripId) return true;
     return a.fareSom == b.fareSom && a.distanceKm == b.distanceKm;
   }
+
+  /// Trips whose completion dialog was already opened this session — the
+  /// "Safar tugadi" dialog must appear once per trip, whichever path
+  /// (finish button, poll, WebSocket, reconcile) publishes a summary.
+  final Set<String> _completionDialogShownFor = <String>{};
 
   Future<void> _showTripFareCompletionDialog(
     TripFareCompletionPopup data,
@@ -505,10 +519,18 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       final popup = next.fareCompletionPopup;
       if (popup == null) return;
       if (_sameFarePopup(previous?.fareCompletionPopup, popup)) return;
+      final tripId = popup.tripId;
+      if (tripId != null && _completionDialogShownFor.contains(tripId)) return;
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         final still = ref.read(tripProvider).fareCompletionPopup;
         if (still == null || !_sameFarePopup(still, popup)) return;
+        if (tripId != null) {
+          if (!_completionDialogShownFor.add(tripId)) return;
+          if (_completionDialogShownFor.length > 50) {
+            _completionDialogShownFor.remove(_completionDialogShownFor.first);
+          }
+        }
         unawaited(_showTripFareCompletionDialog(still));
       });
     });
@@ -523,7 +545,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     /// Queue-only offers have no `trip_id` yet; assigned / in-progress trips always do.
     final queueOfferOnly =
         req != null && (req.tripId == null || req.tripId!.isEmpty);
-    final offerPreviewActive = trip.pendingQueueOfferExpiresAt == null ||
+    final offerPreviewActive =
+        trip.pendingQueueOfferExpiresAt == null ||
         DateTime.now().isBefore(trip.pendingQueueOfferExpiresAt!);
     final showOffer =
         online &&
@@ -555,7 +578,11 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     final showDashboard = !showMap;
     final showUnfinishedTripCard = trip.hasActiveTrip && !showMap && !showOffer;
     // Room for map FABs: bottom sheet is one column (fare strip + trip panel) when not in progress.
-    final mapBottomInset = showMap ? (tripInProgress ? 280.0 : 360.0) : 0.0;
+    final mapBottomInset = showMap
+        ? (_tripPanelCollapsed
+              ? (tripInProgress ? 190.0 : 270.0)
+              : (tripInProgress ? 280.0 : 360.0))
+        : 0.0;
 
     return Scaffold(
       key: _drawerKey,
@@ -712,7 +739,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                     arrivedText: t.trip_status_ready_to_start,
                     startedText: t.unfinished_trip_phase_started,
                   ),
-                  if (!tripInProgress) ...[
+                  if (!tripInProgress && !_tripPanelCollapsed) ...[
                     const SizedBox(height: 8),
                     TripRiderInfoCard(
                       request: trip.activeRequest!,
@@ -743,8 +770,6 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                         );
                       },
                     ),
-                    const SizedBox(height: 8),
-                    TripMapStatsPill(trip: trip, driverPos: driverPosForUi),
                   ],
                 ],
               ),
@@ -766,9 +791,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                   children: [
                     // Balance top-up is manual: an empty wallet silently stops orders.
                     // Explain it (with a support contact) instead of an empty offer list.
-                    if (online &&
-                        b?.totalSom != null &&
-                        b!.totalSom! <= 0)
+                    if (online && b?.totalSom != null && b!.totalSom! <= 0)
                       Padding(
                         padding: const EdgeInsets.only(bottom: 12),
                         child: Material(
@@ -777,8 +800,9 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                           child: ListTile(
                             leading: Icon(
                               Icons.account_balance_wallet_outlined,
-                              color:
-                                  Theme.of(context).colorScheme.onErrorContainer,
+                              color: Theme.of(
+                                context,
+                              ).colorScheme.onErrorContainer,
                             ),
                             title: Text(
                               t.balance_empty_orders_paused,
@@ -868,6 +892,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       ),
                     DriverDashboardPanel(
                       key: const ValueKey('dash'),
+                      online: online,
                       promoValue: promoStr,
                       cashValue: cashStr,
                       totalBalanceText: totalStr,
@@ -941,14 +966,32 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                       mainAxisSize: MainAxisSize.min,
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
+                        if (showMap)
+                          _PanelHandle(
+                            collapsed: _tripPanelCollapsed,
+                            onTap: () => setState(
+                              () => _tripPanelCollapsed = !_tripPanelCollapsed,
+                            ),
+                          ),
                         if (trip.activeRequest != null &&
-                            trip.status != TripStatus.finished) ...[
-                          TripFareDistanceStrip(trip: trip),
+                            trip.status != TripStatus.finished &&
+                            !(showMap && _tripPanelCollapsed)) ...[
+                          TripFareDistanceStrip(
+                            trip: trip,
+                            driverPos: driverPosForUi,
+                          ),
                           const SizedBox(height: 8),
                         ],
                         _TripActionPanel(
+                          // Keyed by trip only — never by status. The action methods
+                          // publish the new status optimistically on their first line;
+                          // a status-keyed panel was disposed right there, mid-request:
+                          // the busy spinner vanished, the next button became tappable
+                          // while the previous POST was still in flight (a second tap
+                          // then hit `/trip/start` against a server still at WAITING),
+                          // and every error snackbar was dropped on an unmounted context.
                           key: ValueKey(
-                            'trip_${trip.activeRequest?.tripId ?? trip.activeRequest?.id ?? 'none'}_${trip.status.name}',
+                            'trip_${trip.activeRequest?.tripId ?? trip.activeRequest?.id ?? 'none'}',
                           ),
                           trip: trip,
                           driverPos: driverPosForUi,
@@ -968,6 +1011,45 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
 }
 
 /// No map on idle / pending offer (offer is inline on [DriverDashboardPanel]) — map after Accept.
+/// Chevron handle above the trip panel: folds the fare strip and the rider card
+/// away so the map gets the space; the primary action always stays.
+class _PanelHandle extends StatelessWidget {
+  const _PanelHandle({required this.collapsed, required this.onTap});
+
+  final bool collapsed;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final theme = Theme.of(context);
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.only(bottom: 6),
+        child: Material(
+          color: theme.colorScheme.surface.withValues(alpha: 0.92),
+          borderRadius: BorderRadius.circular(999),
+          elevation: 2,
+          clipBehavior: Clip.antiAlias,
+          child: InkWell(
+            onTap: onTap,
+            child: SizedBox(
+              width: 64,
+              height: 28,
+              child: Icon(
+                collapsed
+                    ? Icons.keyboard_arrow_up_rounded
+                    : Icons.keyboard_arrow_down_rounded,
+                size: 24,
+                color: theme.colorScheme.onSurface.withValues(alpha: 0.8),
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _HomeBackdrop extends StatelessWidget {
   const _HomeBackdrop();
 
@@ -1033,7 +1115,10 @@ class _LocationDebugPill extends StatelessWidget {
   }
 }
 
-Future<bool> _confirmCancelTrip(BuildContext context, AppLocalizations t) async {
+Future<bool> _confirmCancelTrip(
+  BuildContext context,
+  AppLocalizations t,
+) async {
   final ok = await showDialog<bool>(
     context: context,
     builder: (ctx) => AlertDialog(
@@ -1080,22 +1165,33 @@ class _TripActionPanel extends ConsumerStatefulWidget {
 }
 
 class _TripActionPanelState extends ConsumerState<_TripActionPanel> {
-  /// True while a trip action is in flight. Every button here fires a network call
-  /// that can take seconds (network jitter, cold-starting host). Without this the
-  /// button stays enabled and unchanged, the driver assumes the tap was lost, taps
-  /// again, and the app sends a duplicate `/trip/arrived` | `/trip/start` | `/trip/finish`
-  /// — the second of which typically fails and shows an error on a successful action.
-  bool _busy = false;
+  /// Trip actions run strictly one after another so each `/trip/*` call goes out
+  /// exactly once per tap, without any loading state on the buttons: the optimistic
+  /// status change (Yetib keldim → Safarni boshlash → Safarni tugatish) is the tap's
+  /// feedback. A spinner while the request was in flight read as "the app froze",
+  /// and a bare double tap used to fire the same request twice.
+  ///
+  /// A tap made while the previous action is still in flight is honoured right after
+  /// it — but only if the trip is still at the stage that button belonged to
+  /// ([forStatus]). A failed, reverted action must not let the queued tap fire the
+  /// next transition against the wrong stage, and a double tap on one button must
+  /// not run its action twice.
+  Future<void> _queue = Future<void>.value();
 
-  /// Runs [action] at most once at a time, showing progress on the button.
-  Future<void> _guard(Future<void> Function() action) async {
-    if (_busy) return;
-    setState(() => _busy = true);
-    try {
+  Future<void> _serial(
+    TripStatus? forStatus,
+    Future<void> Function() action,
+  ) {
+    final run = _queue.then((_) async {
+      if (!mounted) return;
+      if (forStatus != null && ref.read(tripProvider).status != forStatus) {
+        return;
+      }
       await action();
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
+    });
+    // Keep the chain alive after a failure; each action reports its own error.
+    _queue = run.catchError((_) {});
+    return run;
   }
 
   @override
@@ -1115,21 +1211,11 @@ class _TripActionPanelState extends ConsumerState<_TripActionPanel> {
       VoidCallback? onPressed,
       required Color color,
     }) {
-      final enabled = onPressed != null && !_busy;
       return SizedBox(
         height: 64,
         child: FilledButton.icon(
-          onPressed: enabled ? onPressed : null,
-          icon: _busy
-              ? const SizedBox(
-                  width: 22,
-                  height: 22,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2.4,
-                    color: Colors.white,
-                  ),
-                )
-              : Icon(icon, color: Colors.white),
+          onPressed: onPressed,
+          icon: Icon(icon, color: Colors.white),
           label: Text(
             text,
             maxLines: 1,
@@ -1141,10 +1227,6 @@ class _TripActionPanelState extends ConsumerState<_TripActionPanel> {
           ),
           style: FilledButton.styleFrom(
             backgroundColor: color,
-            // Keep the brand colour while busy so the button does not look broken.
-            disabledBackgroundColor: _busy
-                ? color.withValues(alpha: 0.75)
-                : null,
             shape: RoundedRectangleBorder(
               borderRadius: BorderRadius.circular(18),
             ),
@@ -1211,15 +1293,13 @@ class _TripActionPanelState extends ConsumerState<_TripActionPanel> {
                     ),
                     // Destructive and irreversible, on a screen used while driving —
                     // always confirm before cancelling.
-                    onPressed: _busy
-                        ? null
-                        : () async {
+                    onPressed: () async {
                             final confirmed = await _confirmCancelTrip(
                               context,
                               t,
                             );
                             if (!confirmed || !context.mounted) return;
-                            await _guard(() async {
+                            await _serial(null, () async {
                               try {
                                 await ref
                                     .read(tripProvider.notifier)
@@ -1274,91 +1354,79 @@ class _TripActionPanelState extends ConsumerState<_TripActionPanel> {
                           // in `POST /trip/arrived`. Requiring a fix used to leave the
                           // button permanently dead in a garage / on a bad GPS day, with
                           // no way for the driver to progress the trip.
-                          onPressed: () => _guard(() async {
-                                  final locNotifier = ref.read(
-                                    driverLocationSyncProvider.notifier,
-                                  );
-                                  final tripNotifier = ref.read(
-                                    tripProvider.notifier,
-                                  );
-                                  try {
-                                    // Fire the location refresh in PARALLEL, never in front of
-                                    // the action: `/trip/arrived` carries lat/lng/accuracy/timestamp
-                                    // in its own body, and [toArrived] publishes the optimistic
-                                    // status on its first line. Awaiting the flush here put two
-                                    // extra round trips (~1.2s) between the tap and the UI moving.
-                                    // Use map/UI coordinates on Android: [flushHttpNow] can no-op if [_last] in
-                                    // [DriverLocationSyncController] is behind the smoothed map position.
-                                    final p = driverPos;
-                                    if (p != null) {
-                                      unawaited(
-                                        locNotifier
-                                            .flushHttpNowAt(
-                                              p.latitude,
-                                              p.longitude,
-                                              accuracy: driverAccuracyM,
-                                              fixTimestamp: driverFixAt,
-                                            )
-                                            .timeout(_locationFlushTimeout)
-                                            .catchError((_) {}),
-                                      );
-                                    }
-                                    await tripNotifier.toArrived(
-                                      lat: p?.latitude,
-                                      lng: p?.longitude,
-                                      accuracy: driverAccuracyM,
-                                      fixTime: driverFixAt,
-                                    );
-                                  } on DioException catch (e) {
-                                    if (context.mounted) {
-                                      final code =
-                                          (parseDriverApiErrorCode(e) ?? '')
-                                              .toUpperCase();
-                                      final msg =
-                                          (code == 'DRIVER_LOCATION_STALE' ||
-                                              code ==
-                                                  'LIVE_LOCATION_INACTIVE' ||
-                                              isTelegramLiveLocationBackendError(
-                                                e,
-                                              ))
-                                          ? tripLiveLocationStaleHint(t)
-                                          : (parseDriverApiErrorMessage(e) ??
-                                                t.offline_api_failed);
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        SnackBar(content: Text(msg)),
-                                      );
-                                    }
-                                  } on DriverUserException catch (e) {
-                                    if (context.mounted) {
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        SnackBar(
-                                          content: Text(
-                                            _driverUserExceptionText(e, t),
-                                          ),
-                                        ),
-                                      );
-                                    }
-                                  } catch (e, st) {
-                                    debugPrint(
-                                      '[yetti_driver] Yetib keldim error: $e\n$st',
-                                    );
-                                    if (context.mounted) {
-                                      ScaffoldMessenger.of(
-                                        context,
-                                      ).showSnackBar(
-                                        SnackBar(
-                                          content: Text(
-                                            t.phone_login_network_error,
-                                          ),
-                                        ),
-                                      );
-                                    }
-                                  }
-                                }),
+                          onPressed: () => _serial(TripStatus.waiting, () async {
+                            final locNotifier = ref.read(
+                              driverLocationSyncProvider.notifier,
+                            );
+                            final tripNotifier = ref.read(
+                              tripProvider.notifier,
+                            );
+                            try {
+                              // Fire the location refresh in PARALLEL, never in front of
+                              // the action: `/trip/arrived` carries lat/lng/accuracy/timestamp
+                              // in its own body, and [toArrived] publishes the optimistic
+                              // status on its first line. Awaiting the flush here put two
+                              // extra round trips (~1.2s) between the tap and the UI moving.
+                              // Use map/UI coordinates on Android: [flushHttpNow] can no-op if [_last] in
+                              // [DriverLocationSyncController] is behind the smoothed map position.
+                              final p = driverPos;
+                              if (p != null) {
+                                unawaited(
+                                  locNotifier
+                                      .flushHttpNowAt(
+                                        p.latitude,
+                                        p.longitude,
+                                        accuracy: driverAccuracyM,
+                                        fixTimestamp: driverFixAt,
+                                      )
+                                      .timeout(_locationFlushTimeout)
+                                      .catchError((_) {}),
+                                );
+                              }
+                              await tripNotifier.toArrived(
+                                lat: p?.latitude,
+                                lng: p?.longitude,
+                                accuracy: driverAccuracyM,
+                                fixTime: driverFixAt,
+                              );
+                            } on DioException catch (e) {
+                              if (context.mounted) {
+                                final code = (parseDriverApiErrorCode(e) ?? '')
+                                    .toUpperCase();
+                                final msg =
+                                    (code == 'DRIVER_LOCATION_STALE' ||
+                                        code == 'LIVE_LOCATION_INACTIVE' ||
+                                        isTelegramLiveLocationBackendError(e))
+                                    ? tripLiveLocationStaleHint(t)
+                                    : (parseDriverApiErrorMessage(e) ??
+                                          t.offline_api_failed);
+                                ScaffoldMessenger.of(
+                                  context,
+                                ).showSnackBar(SnackBar(content: Text(msg)));
+                              }
+                            } on DriverUserException catch (e) {
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(
+                                      _driverUserExceptionText(e, t),
+                                    ),
+                                  ),
+                                );
+                              }
+                            } catch (e, st) {
+                              debugPrint(
+                                '[yetti_driver] Yetib keldim error: $e\n$st',
+                              );
+                              if (context.mounted) {
+                                ScaffoldMessenger.of(context).showSnackBar(
+                                  SnackBar(
+                                    content: Text(t.phone_login_network_error),
+                                  ),
+                                );
+                              }
+                            }
+                          }),
                           color: IosTokens.systemBlue,
                         ),
                         // Informational only — the action stays available.
@@ -1385,7 +1453,7 @@ class _TripActionPanelState extends ConsumerState<_TripActionPanel> {
                 primary(
                   text: t.start_trip,
                   icon: Icons.play_arrow,
-                  onPressed: () => _guard(() async {
+                  onPressed: () => _serial(TripStatus.arrived, () async {
                     final locNotifier = ref.read(
                       driverLocationSyncProvider.notifier,
                     );
@@ -1463,9 +1531,16 @@ class _TripActionPanelState extends ConsumerState<_TripActionPanel> {
                 primary(
                   text: t.finish_trip,
                   icon: Icons.task_alt,
-                  onPressed: () => _guard(() async {
+                  onPressed: () => _serial(TripStatus.started, () async {
                     try {
-                      await ref.read(tripProvider.notifier).finishTrip();
+                      await ref
+                          .read(tripProvider.notifier)
+                          .finishTrip(
+                            lat: driverPos?.latitude,
+                            lng: driverPos?.longitude,
+                            accuracy: driverAccuracyM,
+                            fixTime: driverFixAt,
+                          );
                     } on DriverUserException catch (e) {
                       if (context.mounted) {
                         ScaffoldMessenger.of(context).showSnackBar(

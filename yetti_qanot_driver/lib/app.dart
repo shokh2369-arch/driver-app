@@ -55,6 +55,21 @@ class YettiQanotApp extends ConsumerWidget {
         localizationsDelegates: AppLocalizations.localizationsDelegates,
         supportedLocales: AppLocalizations.supportedLocales,
         home: const _AppShell(),
+        // In a wide browser window the phone UI is boxed to phone width and centred, so
+        // the web build looks and behaves like the device it is designed for instead of
+        // stretching cards across a desktop. No-op on mobile.
+        builder: (context, child) {
+          if (!kIsWeb || child == null) return child ?? const SizedBox.shrink();
+          return ColoredBox(
+            color: Theme.of(context).colorScheme.surfaceContainerHigh,
+            child: Center(
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 480),
+                child: child,
+              ),
+            ),
+          );
+        },
       ),
     );
   }

@@ -1,7 +1,7 @@
 // Build-time config (`flutter run --dart-define=KEY=value`).
 //
 // Backend: `docs/DRIVER_HTTP_API_HANDOFF.md`, `DRIVER_CLIENT.md` (Go repo).
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart' show kIsWeb, kDebugMode;
 
 class AppConfig {
   /// **Single source of truth for the backend host.** Every HTTP call (Dio `baseUrl`) and
@@ -11,7 +11,7 @@ class AppConfig {
   /// block), change this **one** value — no other host is hardcoded anywhere in the app.
   static const apiBaseUrl = String.fromEnvironment(
     'API_BASE_URL',
-    defaultValue: 'https://taxi-2r2j.onrender.com',
+    defaultValue: 'https://taxi-2866.onrender.com',
   );
 
   /// Optional full WebSocket base override. Normally empty → the socket URL is derived from
@@ -21,7 +21,10 @@ class AppConfig {
 
   /// Force showing the phone/SMS login screen even when a `driver_id` is saved locally.
   /// Useful for web demos / shared machines.
-  static const forcePhoneLogin = bool.fromEnvironment('FORCE_PHONE_LOGIN', defaultValue: false);
+  static const forcePhoneLogin = bool.fromEnvironment(
+    'FORCE_PHONE_LOGIN',
+    defaultValue: false,
+  );
 
   /// Native app mode (Android/iOS builds of this Flutter app).
   ///
@@ -29,23 +32,35 @@ class AppConfig {
   /// - Override with `--dart-define=IS_NATIVE_APP=true|false` if needed.
   ///
   /// When true, driver live location is posted to the app-only endpoint `/driver/location/app`.
-  static const _isNativeAppDefine = bool.fromEnvironment('IS_NATIVE_APP', defaultValue: true);
+  static const _isNativeAppDefine = bool.fromEnvironment(
+    'IS_NATIVE_APP',
+    defaultValue: true,
+  );
   static bool get isNativeApp => _isNativeAppDefine && !kIsWeb;
 
   /// Extra location debugging: verbose logs + disable some client-side filters/throttles.
   /// Enable with `--dart-define=DEBUG_LOCATION=true`.
-  static const debugLocation = bool.fromEnvironment('DEBUG_LOCATION', defaultValue: false);
+  static const debugLocation = bool.fromEnvironment(
+    'DEBUG_LOCATION',
+    defaultValue: false,
+  );
 
   /// Native / debug driver auth — sent as `X-Driver-Id` when non-empty.
   static const driverId = String.fromEnvironment('DRIVER_ID', defaultValue: '');
 
   /// Telegram Web App init data — `X-Telegram-Init-Data` when non-empty.
-  static const telegramInitData = String.fromEnvironment('TELEGRAM_INIT_DATA', defaultValue: '');
+  static const telegramInitData = String.fromEnvironment(
+    'TELEGRAM_INIT_DATA',
+    defaultValue: '',
+  );
 
   /// Optional documented `GET` path on the **same** host as [apiBaseUrl] (must start with `/`)
   /// for wallet-shaped JSON when balances are not in `GET /driver/available-requests`.
   /// Do not set invented Mini paths — only routes the backend actually serves.
-  static const driverWalletHttpPath = String.fromEnvironment('DRIVER_WALLET_HTTP_PATH', defaultValue: '');
+  static const driverWalletHttpPath = String.fromEnvironment(
+    'DRIVER_WALLET_HTTP_PATH',
+    defaultValue: '',
+  );
 
   /// Optional override for driver trip history `GET` on the same host as [apiBaseUrl].
   /// Must start with `/`, no `..`. When empty, the client uses **`/driver/trips`**.
@@ -71,6 +86,58 @@ class AppConfig {
     'OSRM_ROUTING_BASE_URL',
     defaultValue: 'https://router.project-osrm.org',
   );
+
+  /// Raster **basemap tile** URL template for `flutter_map` (`{z}/{x}/{y}` placeholders;
+  /// `{s}` enables the a/b/c subdomains for providers that use them).
+  ///
+  /// Default: the **OpenStreetMap standard tile API**. Its usage policy
+  /// (https://operations.osmfoundation.org/policies/tiles/) permits light app use with a
+  /// valid User-Agent and attribution, but not heavy or bulk traffic — for a large fleet in
+  /// production, point this at your own tile server or a commercial OSM tile provider:
+  ///   --dart-define=MAP_TILE_URL_TEMPLATE=https://tiles.your-domain.com/{z}/{x}/{y}.png
+  static const mapTileUrlTemplate = String.fromEnvironment(
+    'MAP_TILE_URL_TEMPLATE',
+    defaultValue: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+  );
+
+  /// Map night mode window in **Tashkent** time (UTC+5): night tiles from
+  /// [mapNightStartHour]:00 until [mapNightEndHour]:00, switching automatically
+  /// while the map is open and independent of the app theme.
+  static const mapNightStartHour = int.fromEnvironment(
+    'MAP_NIGHT_START_HOUR',
+    defaultValue: 17,
+  );
+  static const mapNightEndHour = int.fromEnvironment(
+    'MAP_NIGHT_END_HOUR',
+    defaultValue: 6,
+  );
+
+  /// Fallback raster tile template used per tile when [mapTileUrlTemplate] keeps
+  /// failing (the public OSM service answers whole bursts with 503 at times). The
+  /// German OSM community mirror (same data, similar style; CARTO's free tiles are
+  /// watermarked "API key required" now). Set empty to disable the fallback.
+  static const mapTileFallbackUrlTemplate = String.fromEnvironment(
+    'MAP_TILE_FALLBACK_URL_TEMPLATE',
+    defaultValue: 'https://tile.openstreetmap.de/{z}/{x}/{y}.png',
+  );
+
+  /// **Debug builds only.** `--dart-define=MOCK_LOCATION=41.3111,69.2406` feeds a
+  /// fixed GPS position (with a little drift) instead of the platform location and
+  /// reports permission as granted, so the trip map can be exercised in mock mode
+  /// on a machine or browser profile without location access. Ignored in release.
+  static const _mockLocationDefine = String.fromEnvironment(
+    'MOCK_LOCATION',
+    defaultValue: '',
+  );
+  static ({double lat, double lng})? get mockLocation {
+    if (!kDebugMode) return null;
+    final parts = _mockLocationDefine.split(',');
+    if (parts.length != 2) return null;
+    final lat = double.tryParse(parts[0].trim());
+    final lng = double.tryParse(parts[1].trim());
+    if (lat == null || lng == null) return null;
+    return (lat: lat, lng: lng);
+  }
 
   /// True while routing still points at the shared public demo server.
   static bool get usesPublicDemoRouting =>
@@ -155,7 +222,8 @@ class AppConfig {
         queryParameters: {
           ...base.queryParameters,
           if (token.isNotEmpty) 'access_token': token,
-          if (!isNativeApp && telegramInitData.isNotEmpty) 'init_data': telegramInitData,
+          if (!isNativeApp && telegramInitData.isNotEmpty)
+            'init_data': telegramInitData,
           if (telegramInitData.isEmpty && did.isNotEmpty) 'driver_id': did,
         },
       ),
@@ -168,7 +236,9 @@ class AppConfig {
     } else {
       scheme = 'ws';
     }
-    final path = u.path.isEmpty ? '/ws/driver-dispatch' : (u.path.startsWith('/') ? u.path : '/${u.path}');
+    final path = u.path.isEmpty
+        ? '/ws/driver-dispatch'
+        : (u.path.startsWith('/') ? u.path : '/${u.path}');
     final qm = u.queryParameters;
     final q = qm.isEmpty ? '' : '?${Uri(queryParameters: qm).query}';
 
@@ -177,7 +247,8 @@ class AppConfig {
     if (u.hasPort && u.port != 0) {
       p = u.port;
     }
-    if (p != null && ((scheme == 'wss' && p == 443) || (scheme == 'ws' && p == 80))) {
+    if (p != null &&
+        ((scheme == 'wss' && p == 443) || (scheme == 'ws' && p == 80))) {
       p = null;
     }
     final authority = p != null ? '$host:$p' : host;
@@ -250,7 +321,8 @@ class AppConfig {
           ...base.queryParameters,
           'trip_id': tripId,
           if (token.isNotEmpty) 'access_token': token,
-          if (!isNativeApp && telegramInitData.isNotEmpty) 'init_data': telegramInitData,
+          if (!isNativeApp && telegramInitData.isNotEmpty)
+            'init_data': telegramInitData,
           if (telegramInitData.isEmpty && did.isNotEmpty) 'driver_id': did,
         },
       ),
@@ -265,7 +337,8 @@ class AppConfig {
       scheme = 'ws';
     }
 
-    final dropPort = !u.hasPort ||
+    final dropPort =
+        !u.hasPort ||
         u.port == 0 ||
         (scheme == 'wss' && u.port == 443) ||
         (scheme == 'ws' && u.port == 80);
@@ -302,7 +375,9 @@ class AppConfig {
       scheme = 'ws';
     }
 
-    final path = u.path.isEmpty ? '/ws' : (u.path.startsWith('/') ? u.path : '/${u.path}');
+    final path = u.path.isEmpty
+        ? '/ws'
+        : (u.path.startsWith('/') ? u.path : '/${u.path}');
     final qm = u.queryParameters;
     final q = qm.isEmpty ? '' : '?${Uri(queryParameters: qm).query}';
 
@@ -311,11 +386,11 @@ class AppConfig {
     if (u.hasPort && u.port != 0) {
       port = u.port;
     }
-    if (port != null && ((scheme == 'wss' && port == 443) || (scheme == 'ws' && port == 80))) {
+    if (port != null &&
+        ((scheme == 'wss' && port == 443) || (scheme == 'ws' && port == 80))) {
       port = null;
     }
     final authority = port != null ? '$host:$port' : host;
     return '$scheme://$authority$path$q';
   }
 }
-

@@ -115,14 +115,32 @@ class DriverLocationSyncController extends Notifier<int> {
     scheduleNext();
   }
 
+  /// Cached last fix, or `null`. `Geolocator.getLastKnownPosition` throws
+  /// `UnsupportedError` on **web** and can throw a `PlatformException` on some
+  /// devices; before this guard the first online tick on web died with an
+  /// unhandled error instead of simply waiting for the position stream.
+  Future<Position?> _lastKnownPositionOrNull() async {
+    if (kIsWeb) return null;
+    try {
+      return await Geolocator.getLastKnownPosition();
+    } catch (_) {
+      return null;
+    }
+  }
+
   Future<void> _postHttp({
     required bool ignoreMinInterval,
     required bool throwOnFail,
   }) async {
     if (ref.read(driverStatusProvider) != DriverStatus.online) return;
+    // Piggyback on the location cadence: if the server never acknowledged ONLINE
+    // (flaky link during the toggle), re-send it now — otherwise dispatch stays off.
+    unawaited(
+      ref.read(driverStatusProvider.notifier).reassertServerOnlineIfNeeded(),
+    );
     var p = _last;
     if (p == null) {
-      final known = await Geolocator.getLastKnownPosition();
+      final known = await _lastKnownPositionOrNull();
       if (known != null) {
         _last = known;
         p = known;

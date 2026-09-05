@@ -47,7 +47,9 @@ bool _walletKeysLogged = false;
 
 String? _formatOfferDistanceKm(AppLocalizations t, double? km) {
   if (km == null || !km.isFinite || km <= 0) return null;
-  final value = km < 1 ? '${(km * 1000).round()} m' : '${km.toStringAsFixed(1)} km';
+  final value = km < 1
+      ? '${(km * 1000).round()} m'
+      : '${km.toStringAsFixed(1)} km';
   return '${t.trip_distance_label}: $value';
 }
 
@@ -116,7 +118,7 @@ const Duration _wsReconnectMaxDelay = Duration(seconds: 60);
 const int _dispatchFailuresBeforeNotice = 3;
 
 /// Live metered stats from `GET /trip/:id` while [TripStatus.started] (mini-app LIVE_TRIP_POLL_INTERVAL_MS).
-const Duration _liveTripPollInterval = Duration(seconds: 3);
+const Duration _liveTripPollInterval = Duration(seconds: 5);
 
 /// Server-side long-poll window for `GET /driver/available-requests?wait_sec=`. The server
 /// holds the request until dispatch changes or this elapses, then the client re-issues
@@ -134,6 +136,9 @@ class TripController extends Notifier<TripState> {
   Timer? _mockTimer;
   Timer? _pollTimer;
   Timer? _liveTripPollTimer;
+
+  /// Trip id the live poll is currently running for (see [_syncLiveTripPoll]).
+  String? _liveTripPollTripId;
   Timer? _lifecyclePollDebounce;
   DateTime? _lastAncillaryPoll;
   MapLatLng? _lastRemoteUiPoint;
@@ -143,6 +148,9 @@ class TripController extends Notifier<TripState> {
   Timer? _tripWsReconnectTimer;
   int _tripWsReconnectAttempt = 0;
   WebSocketService? _dispatchWs;
+
+  /// In-flight dispatch-socket connect, so concurrent nudges share one attempt.
+  Future<void>? _dispatchWsConnecting;
   StreamSubscription<Map<String, dynamic>>? _dispatchWsSub;
   DateTime? _lastDispatchPokeAt;
   String? _lastDispatchWsAuthKey;
@@ -180,6 +188,7 @@ class TripController extends Notifier<TripState> {
   /// Queue preview rows dismissed after the dashboard countdown — do not auto-show again until
   /// the request id disappears from [GET /driver/available-requests] (see [_pruneDismissedQueuePreviews]).
   final Set<String> _dismissedQueuePreviewIds = {};
+
   /// When each queue `request_id` first triggered [LocalNotifications.notifyNewOrder].
   final Map<String, DateTime> _queueOfferNotifiedAt = {};
   String? _lastNotifiedOfferId;
@@ -361,6 +370,23 @@ class TripController extends Notifier<TripState> {
 
   void _clearLocalAdvance() => _localAdvance.clear();
 
+  /// The optimistic status currently held for [tripId], if any — captured before a
+  /// tap so a failed action can put it back instead of dropping it.
+  TripStatus? _heldAdvanceFor(String tripId) =>
+      _localAdvance.tripId == tripId ? _localAdvance.status : null;
+
+  /// Undo a tap's [_noteLocalAdvance]: re-hold what was held before it (e.g. the
+  /// ARRIVED the app kept past a proximity rejection), or clear when nothing was.
+  /// Clearing unconditionally let the next poll drop the button from "Safarni
+  /// boshlash" back to "Yetib keldim" after a failed Start.
+  void _restoreLocalAdvance(TripStatus? previous) {
+    if (previous == null) {
+      _clearLocalAdvance();
+    } else {
+      _noteLocalAdvance(previous);
+    }
+  }
+
   /// Keep a freshly-tapped (optimistic) status from being reverted by a server
   /// snapshot that has not committed the transition yet.
   TripStatus _guardWithLocalAdvance(TripStatus mapped, String? tripId) =>
@@ -416,7 +442,9 @@ class TripController extends Notifier<TripState> {
     // The battery win of long polling is for the native app on an all-day shift; web uses
     // the short chained poll and recovers from blips faster.
     if (kIsWeb) return false;
-    if (ref.read(appLifecycleProvider) == AppLifecyclePhase.backgrounded) return false;
+    if (ref.read(appLifecycleProvider) == AppLifecyclePhase.backgrounded) {
+      return false;
+    }
     if (state.requiresContinuousLiveLocation) return false;
     if (_dispatchWsHealthy) return false;
     return true;
@@ -445,11 +473,11 @@ class TripController extends Notifier<TripState> {
     final tripHeavy = state.requiresContinuousLiveLocation;
     var seconds = bg
         ? (tripHeavy
-            ? _dispatchPollBackgroundActiveSeconds
-            : _dispatchPollBackgroundIdleSeconds)
+              ? _dispatchPollBackgroundActiveSeconds
+              : _dispatchPollBackgroundIdleSeconds)
         : (tripHeavy
-            ? _dispatchPollActiveForegroundSeconds
-            : _dispatchPollIdleForegroundSeconds);
+              ? _dispatchPollActiveForegroundSeconds
+              : _dispatchPollIdleForegroundSeconds);
     if (_dispatchWsHealthy) {
       // Web: WS carries new orders; keep a slow HTTP safety net only.
       seconds = kIsWeb
@@ -614,6 +642,13 @@ class TripController extends Notifier<TripState> {
           _lastNotifiedAssignedTripId = snap.assignedTripId;
           final prev = state;
           final req = prev.activeRequest;
+          final finishedId = snap.assignedTripId!;
+          // The server keeps reporting the last trip as FINISHED for a few polls
+          // after we finished it here. That must not build a second (empty)
+          // summary on top of the one already showing.
+          final alreadyClosedHere = _isFinishedLocally(finishedId);
+          _markTripFinishedLocally(finishedId);
+          _cancelLiveTripPoll();
           await _disconnectWs();
           state = TripState(
             status: TripStatus.waiting,
@@ -623,10 +658,13 @@ class TripController extends Notifier<TripState> {
             dashboardStats: state.dashboardStats,
             referralLink: state.referralLink,
             hydrationIssue: TripHydrationIssue.none,
-            fareCompletionPopup: TripFareCompletionPopup(
-              fareSom: req?.fareSom,
-              distanceKm: req?.distanceKm,
-            ),
+            fareCompletionPopup: alreadyClosedHere
+                ? prev.fareCompletionPopup
+                : TripFareCompletionPopup(
+                    fareSom: req?.fareSom,
+                    distanceKm: req?.distanceKm,
+                    tripId: finishedId,
+                  ),
             clientOdometerKm: 0,
             dispatchUnreachable: false,
           );
@@ -649,12 +687,25 @@ class TripController extends Notifier<TripState> {
           );
         }
         try {
-          final tripJson = await repo.getTrip(snap.assignedTripId!);
-          final req = tripRequestFromTripJson(
-            tripJson,
-            requestId:
-                tripJson['request_id']?.toString() ?? snap.assignedTripId!,
-          );
+          // While the live poll already refreshes this trip every
+          // [_liveTripPollInterval], a second `GET /trip/:id` per dispatch poll adds
+          // nothing — reuse the request it maintains.
+          final current = state.activeRequest;
+          final liveHere =
+              _liveTripPollTimer != null &&
+              _liveTripPollTripId == snap.assignedTripId &&
+              current?.tripId == snap.assignedTripId;
+          final TripRequest req;
+          if (liveHere) {
+            req = current!;
+          } else {
+            final tripJson = await repo.getTrip(snap.assignedTripId!);
+            req = tripRequestFromTripJson(
+              tripJson,
+              requestId:
+                  tripJson['request_id']?.toString() ?? snap.assignedTripId!,
+            );
+          }
           final mapped = parseServerTripStatus(st) ?? TripStatus.waiting;
           final prev = state;
           // UX requirement: do not enforce proximity gating for "Yetib keldim".
@@ -662,8 +713,10 @@ class TripController extends Notifier<TripState> {
           // the previous status. Preserve the locally-tapped status once the driver advances the
           // trip, until the server catches up (STARTED/FINISHED) or the trip id changes — otherwise
           // a stale poll reverts the button and the driver has to tap again.
-          final effectiveStatus =
-              _guardWithLocalAdvance(mapped, snap.assignedTripId);
+          final effectiveStatus = _guardWithLocalAdvance(
+            mapped,
+            snap.assignedTripId,
+          );
           _publishTripState(
             state.copyWith(
               activeRequest: () => req,
@@ -773,7 +826,9 @@ class TripController extends Notifier<TripState> {
       // non-fatal event so we don't flip the UI into "dispatch unreachable" banner.
       if (e is DioException && e.type == DioExceptionType.cancel) {
         if (kDebugMode) {
-          debugPrint('[yetti_driver] available-requests poll cancelled; ignoring for dispatch banner');
+          debugPrint(
+            '[yetti_driver] available-requests poll cancelled; ignoring for dispatch banner',
+          );
         }
       } else {
         _noteDispatchPollFailed();
@@ -862,7 +917,10 @@ class TripController extends Notifier<TripState> {
     // while disconnected; within this connection, seq gaps then trigger their own refetch.
     _lastWsSeq = null;
     final hdr = _wsAuthHeaders();
-    final svc = WebSocketService(url: url, connectHeaders: hdr.isEmpty ? null : hdr);
+    final svc = WebSocketService(
+      url: url,
+      connectHeaders: hdr.isEmpty ? null : hdr,
+    );
     _ws = svc;
     await svc.connect();
     if (!svc.hasActiveChannel) {
@@ -909,14 +967,34 @@ class TripController extends Notifier<TripState> {
     });
   }
 
-  /// Tear down then re-establish the poke socket, in that order. Firing both as
-  /// independent futures raced: the connect could observe the old socket and bail.
+  /// Deliberate (re)connect: clear any backoff, then let the guarded connect decide.
+  /// It keeps a healthy socket whose auth fingerprint is unchanged and replaces one
+  /// whose auth changed. Tearing the socket down unconditionally here made every
+  /// startup trigger (going online, driver id, session, first poll) open its own.
   Future<void> _reconnectDispatchPokeWs() async {
-    await _disconnectDispatchPokeWs();
+    _dispatchWsReconnectTimer?.cancel();
+    _dispatchWsReconnectTimer = null;
+    _dispatchWsReconnectAttempt = 0;
+    _dispatchWsNextAttemptAt = null;
     await _connectDispatchPokeWsIfNeeded();
   }
 
-  Future<void> _connectDispatchPokeWsIfNeeded() async {
+  /// Single-flight wrapper around [_connectDispatchPokeWsNow]. On startup the online
+  /// transition, the driver-id / session listeners and every poll's `finally` all
+  /// nudge this within the same second; before the first socket is assigned none of
+  /// them sees it, so each opened its own — three sockets, three `hello` pokes, three
+  /// polls, and the leaked ones were never disposed.
+  Future<void> _connectDispatchPokeWsIfNeeded() {
+    final inFlight = _dispatchWsConnecting;
+    if (inFlight != null) return inFlight;
+    final attempt = _connectDispatchPokeWsNow().whenComplete(() {
+      _dispatchWsConnecting = null;
+    });
+    _dispatchWsConnecting = attempt;
+    return attempt;
+  }
+
+  Future<void> _connectDispatchPokeWsNow() async {
     if (!AppConfig.driverDispatchPokeWsEnabled) return;
     if (!_hasDriverAuth()) return;
     if (ref.read(driverStatusProvider) != DriverStatus.online) return;
@@ -946,6 +1024,12 @@ class TripController extends Notifier<TripState> {
       connectHeaders: hdr.isEmpty ? null : hdr,
     );
     await svc.connect();
+    if (ref.read(driverStatusProvider) != DriverStatus.online) {
+      // Went OFFLINE while the handshake was in flight: do not keep a socket the
+      // offline teardown could never see.
+      await svc.dispose();
+      return;
+    }
     if (!svc.hasActiveChannel) {
       if (kDebugMode) {
         debugPrint(
@@ -991,8 +1075,9 @@ class TripController extends Notifier<TripState> {
     if (!AppConfig.driverDispatchPokeWsEnabled) return;
     if (ref.read(driverStatusProvider) != DriverStatus.online) return;
     unawaited(
-      _disconnectDispatchPokeWs(resetBackoff: false)
-          .then((_) => _scheduleDispatchWsReconnect()),
+      _disconnectDispatchPokeWs(
+        resetBackoff: false,
+      ).then((_) => _scheduleDispatchWsReconnect()),
     );
   }
 
@@ -1016,7 +1101,8 @@ class TripController extends Notifier<TripState> {
   }
 
   Map<String, String> _dispatchWsHeaders() {
-    final headers = _wsAuthHeaders(); // Authorization: Bearer + X-Driver-Id (native)
+    final headers =
+        _wsAuthHeaders(); // Authorization: Bearer + X-Driver-Id (native)
     final session = _driverToken();
     if (session.isNotEmpty) {
       headers['X-Driver-Session'] = session; // harmless legacy hint
@@ -1087,10 +1173,12 @@ class TripController extends Notifier<TripState> {
         json,
         requestId: state.activeRequest?.id ?? tid,
       ).copyWith(tripId: () => tid);
-      final serverStatus = parseServerTripStatus(tripStatusStringFromJson(json));
-
-      if (serverStatus == TripStatus.finished) {
-        // Completed or cancelled on another surface (bot). Close it out locally.
+      final rawStatus = (tripStatusStringFromJson(json) ?? '').toUpperCase();
+      final cancelled = rawStatus.startsWith('CANCEL');
+      final serverStatus = parseServerTripStatus(rawStatus);
+      if (serverStatus == TripStatus.finished || cancelled) {
+        // Completed or cancelled on another surface (bot / rider). Close it out
+        // locally; a cancellation has no fare to show.
         final prev = state;
         _markTripFinishedLocally(tid);
         _cancelLiveTripPoll();
@@ -1099,10 +1187,14 @@ class TripController extends Notifier<TripState> {
             status: TripStatus.finished,
             activeRequest: () => null,
             remoteLiveLocation: () => null,
-            fareCompletionPopup: () => TripFareCompletionPopup(
-              fareSom: req.fareSom ?? prev.activeRequest?.fareSom,
-              distanceKm: req.distanceKm ?? prev.activeRequest?.distanceKm,
-            ),
+            fareCompletionPopup: () => cancelled
+                ? null
+                : TripFareCompletionPopup(
+                    fareSom: req.fareSom ?? prev.activeRequest?.fareSom,
+                    distanceKm:
+                        req.distanceKm ?? prev.activeRequest?.distanceKm,
+                    tripId: tid,
+                  ),
             clientOdometerKm: 0,
           ),
         );
@@ -1114,7 +1206,9 @@ class TripController extends Notifier<TripState> {
           ? _guardWithLocalAdvance(serverStatus, tid)
           : state.status;
       final wasStarted = state.status == TripStatus.started;
-      _publishTripState(state.copyWith(activeRequest: () => req, status: guarded));
+      _publishTripState(
+        state.copyWith(activeRequest: () => req, status: guarded),
+      );
       if (guarded == TripStatus.started && !wasStarted) _syncLiveTripPoll();
     } catch (e) {
       debugPrint('[yetti_driver] trip reconcile failed: $e');
@@ -1124,15 +1218,27 @@ class TripController extends Notifier<TripState> {
   void _cancelLiveTripPoll() {
     _liveTripPollTimer?.cancel();
     _liveTripPollTimer = null;
+    _liveTripPollTripId = null;
   }
 
   /// `GET /trip/:id` every [_liveTripPollInterval] while trip is STARTED (fare / distance from API).
+  ///
+  /// Idempotent: every dispatch poll and WS echo calls this while the trip is STARTED,
+  /// and restarting the timer each time fired an extra immediate `GET /trip/:id` per
+  /// call on top of the periodic one. A poll already running for this trip is left alone.
   void _syncLiveTripPoll() {
-    _cancelLiveTripPoll();
-    if (state.status != TripStatus.started) return;
     final tid = state.activeRequest?.tripId?.trim();
-    if (tid == null || tid.isEmpty) return;
-    if (_repo == null || !AppConfig.hasHttpApi) return;
+    if (state.status != TripStatus.started ||
+        tid == null ||
+        tid.isEmpty ||
+        _repo == null ||
+        !AppConfig.hasHttpApi) {
+      _cancelLiveTripPoll();
+      return;
+    }
+    if (_liveTripPollTimer != null && _liveTripPollTripId == tid) return;
+    _cancelLiveTripPoll();
+    _liveTripPollTripId = tid;
     _liveTripPollTimer = Timer.periodic(_liveTripPollInterval, (_) {
       unawaited(_refreshActiveTripFromApi());
     });
@@ -1152,6 +1258,10 @@ class TripController extends Notifier<TripState> {
         requestId: rid,
       ).copyWith(tripId: () => tid);
       state = state.copyWith(activeRequest: () => req);
+      // Deliberately no automatic replay of `/trip/arrived` / `/trip/start` here even
+      // when the server still sits behind the local stage: each transition must be
+      // POSTed once, by the driver's tap. If the server is behind when the driver
+      // finishes, [finishTrip] replays the missing steps once, on the 409.
     } catch (_) {}
   }
 
@@ -1252,13 +1362,25 @@ class TripController extends Notifier<TripState> {
         if ((dist == null || dist <= 0) && odo > 0) {
           dist = odo;
         }
+        // Finished on this device moments ago (finish button): the summary is
+        // already showing — do not replace it with a second one.
+        final wsTid = m['trip_id']?.toString() ?? req?.tripId;
+        final alreadyClosedHere = _isFinishedLocally(wsTid);
+        if (wsTid != null && wsTid.isNotEmpty) _markTripFinishedLocally(wsTid);
+        _cancelLiveTripPoll();
         state = prev.copyWith(
           status: TripStatus.finished,
           activeRequest: () => null,
           remoteLiveLocation: () => null,
           fareCompletionPopup: () => cancelled
               ? null
-              : TripFareCompletionPopup(fareSom: fare, distanceKm: dist),
+              : alreadyClosedHere
+              ? prev.fareCompletionPopup
+              : TripFareCompletionPopup(
+                  fareSom: fare,
+                  distanceKm: dist,
+                  tripId: wsTid,
+                ),
           clientOdometerKm: 0,
         );
         scheduleMicrotask(_disconnectWs);
@@ -1381,9 +1503,12 @@ class TripController extends Notifier<TripState> {
 
     final repo = _repo;
     if (repo == null) {
-      // Mock mode (no HTTP API configured).
+      // Mock mode (no HTTP API configured): give the offer a trip id so the
+      // trip screen (map + panel) renders exactly as for a real assignment.
+      final req = state.activeRequest;
       state = state.copyWith(
         status: TripStatus.waiting,
+        activeRequest: () => req?.copyWith(tripId: () => 'mock_trip_${req.id}'),
         fareCompletionPopup: () => null,
       );
       return;
@@ -1466,10 +1591,13 @@ class TripController extends Notifier<TripState> {
     final repo = _repo;
     if (repo == null) return;
     final tripJson = await repo.getTrip(tripId);
-    final merged = tripRequestFromTripJson(tripJson, requestId: requestId)
-        .copyWith(tripId: () => tripId);
+    final merged = tripRequestFromTripJson(
+      tripJson,
+      requestId: requestId,
+    ).copyWith(tripId: () => tripId);
     final serverStatus =
-        parseServerTripStatus(tripStatusStringFromJson(tripJson)) ?? TripStatus.waiting;
+        parseServerTripStatus(tripStatusStringFromJson(tripJson)) ??
+        TripStatus.waiting;
     if (serverStatus == TripStatus.finished) {
       // Nothing to route to; leave state as-is.
       return;
@@ -1515,6 +1643,197 @@ class TripController extends Notifier<TripState> {
     return DriverUserException(msg ?? 'Qabul qilishda xatolik.');
   }
 
+  /// Raw server-side status string of [tid] (`WAITING`, `CANCELLED_BY_DRIVER`, …),
+  /// or `null` when it could not be fetched.
+  Future<String?> _fetchServerTripStatusString(String tid) async {
+    final repo = _repo;
+    if (repo == null) return null;
+    try {
+      final json = await repo.getTrip(tid);
+      return tripStatusStringFromJson(json);
+    } catch (e) {
+      debugPrint('[yetti_driver] trip status re-check failed: $e');
+      return null;
+    }
+  }
+
+  /// Server-side status of [tid], or `null` when it could not be fetched / parsed.
+  Future<TripStatus?> _fetchServerTripStatus(String tid) async =>
+      parseServerTripStatus(await _fetchServerTripStatusString(tid));
+
+  bool _isInvalidTransition(DioException e) =>
+      (parseDriverApiErrorCode(e) ?? '').toUpperCase() == 'INVALID_TRANSITION';
+
+  /// The app advances locally past a pickup-proximity rejection (see
+  /// [isPickupProximityRejection]) so the driver is never blocked by GPS
+  /// noise — but the server then still sits at the earlier stage and refuses
+  /// the next transition with 409. Replay the missing step(s) up to [target]
+  /// with the current fix. Returns `null` on success, else the server's
+  /// rejection so the driver sees the real reason (e.g. still too far away).
+  ///
+  /// [from] is the server status the caller has just fetched (see
+  /// [_rawServerStatusAfterFailure]) so the recovery costs one `GET /trip/:id`, not two.
+  Future<DioException?> _replayServerStepsUpTo(
+    String tid,
+    TripStatus target, {
+    TripStatus? from,
+    double? lat,
+    double? lng,
+    double? accuracy,
+    DateTime? fixTime,
+  }) async {
+    final repo = _repo;
+    if (repo == null) return null;
+    var status = from ?? await _fetchServerTripStatus(tid);
+    if (status == null) return null;
+    try {
+      if (status == TripStatus.waiting &&
+          target.index >= TripStatus.arrived.index) {
+        await repo.postTripArrived(
+          tid,
+          lat: lat,
+          lng: lng,
+          accuracy: accuracy,
+          timestamp: fixTime,
+        );
+        status = TripStatus.arrived;
+      }
+      if (status == TripStatus.arrived &&
+          target.index >= TripStatus.started.index) {
+        await repo.postTripStart(
+          tid,
+          lat: lat,
+          lng: lng,
+          accuracy: accuracy,
+          timestamp: fixTime,
+        );
+        status = TripStatus.started;
+      }
+    } on DioException catch (e) {
+      debugPrint(
+        '[yetti_driver] replaying trip steps failed: HTTP ${e.response?.statusCode}',
+      );
+      return e;
+    }
+    return null;
+  }
+
+  /// True when the outcome of a trip action is genuinely unknown: the request may
+  /// have reached the server while the reply was lost, or the server says the
+  /// transition is invalid because the earlier (timed-out) attempt already landed.
+  /// On native, connect-phase failures provably never reached the server, so they
+  /// are excluded (no point paying for a second timeout). On web the browser's
+  /// "connect timeout" also covers waiting for headers, so every transport failure
+  /// counts.
+  bool _actionOutcomeUnknown(DioException e) {
+    final code = (parseDriverApiErrorCode(e) ?? '').toUpperCase();
+    if (code == 'INVALID_TRANSITION') return true;
+    if (!isTransportFailure(e)) return false;
+    if (!kIsWeb &&
+        (e.type == DioExceptionType.connectionTimeout ||
+            e.type == DioExceptionType.connectionError)) {
+      return false;
+    }
+    return true;
+  }
+
+  /// Raw server status of [tid] after a failed trip action, fetched only when the
+  /// outcome is genuinely unknown ([_actionOutcomeUnknown]); `null` otherwise or when
+  /// the re-check itself failed. Fetched **once** per failure and shared between
+  /// [_serverAlreadyApplied], [_isCancelledRaw] and [_replayServerStepsUpTo].
+  Future<String?> _rawServerStatusAfterFailure(DioException e, String tid) async =>
+      _actionOutcomeUnknown(e) ? await _fetchServerTripStatusString(tid) : null;
+
+  bool _isCancelledRaw(String? raw) =>
+      (raw ?? '').toUpperCase().startsWith('CANCEL');
+
+  /// The server says the trip was cancelled (rider / dispatcher) while the driver was
+  /// still acting on it: close it out locally instead of reverting to a dead trip the
+  /// driver can only keep re-tapping.
+  Future<void> _closeCancelledTrip(String tid) async {
+    _markTripFinishedLocally(tid);
+    _cancelLiveTripPoll();
+    _clearLocalAdvance();
+    _publishTripState(
+      state.copyWith(
+        status: TripStatus.finished,
+        activeRequest: () => null,
+        remoteLiveLocation: () => null,
+        fareCompletionPopup: () => null,
+        clientOdometerKm: 0,
+      ),
+    );
+    await _disconnectWs();
+  }
+
+  DriverUserException _tripCancelledException(DioException e) =>
+      DriverUserException(
+        parseDriverApiErrorMessage(e) ?? 'Safar bekor qilingan.',
+        userCode: 'TRIP_CANCELLED',
+      );
+
+  /// A trip action failed without a definitive answer: either a transport failure
+  /// (the request may well have reached the server while the response was lost —
+  /// common on flaky links), or a 409 `INVALID_TRANSITION` because the previous,
+  /// timed-out attempt had already been applied. Blindly reverting the optimistic
+  /// status in those cases left the driver stuck one step behind the server, with
+  /// every further tap answered by "invalid transition".
+  ///
+  /// Given the server's re-checked status ([_rawServerStatusAfterFailure]), returns
+  /// `true` when it already shows [expected] (or moved further on, in which case local
+  /// state is reconciled), so the caller must NOT revert or surface an error.
+  Future<bool> _serverAlreadyApplied(
+    TripStatus? serverStatus, {
+    required TripStatus expected,
+    required TripStatus prevStatus,
+  }) async {
+    if (serverStatus == null || serverStatus == prevStatus) return false;
+    if (serverStatus == expected) return true;
+    // Server is *behind* the tapped status (the earlier step never landed):
+    // let the caller revert and report; the next poll reconciles the rest.
+    if (serverStatus.index < expected.index) return false;
+    // Server is ahead of what was tapped (e.g. advanced from the bot): adopt it.
+    if (state.activeRequest != null) {
+      _clearLocalAdvance();
+      await _reconcileActiveTripFromApi();
+    }
+    return true;
+  }
+
+  /// The server refused a stage transition on distance / live-location grounds
+  /// while the app advanced locally. Not a failure of the tap — a notice that
+  /// the server will be caught up automatically (live poll, finish replay).
+  DriverUserException _serverBehindException(DioException e) {
+    if (isTelegramLiveLocationBackendError(e)) {
+      return DriverUserException(
+        parseDriverApiErrorMessage(e) ?? '',
+        userCode: 'LIVE_LOCATION_INACTIVE',
+      );
+    }
+    final msg = parseDriverApiErrorMessage(e) ??
+        'Server: siz hali olib ketish nuqtasiga yetmadingiz.';
+    return DriverUserException(
+      '$msg Yaqinlashganingizda avtomatik qayta uriniladi.',
+      userCode: 'SERVER_BEHIND_PROXIMITY',
+    );
+  }
+
+  /// `/trip/start` refused on distance: the server's own wording when it sends one,
+  /// else a plain instruction. Distinct code so the UI can phrase it as guidance.
+  DriverUserException _pickupTooFarException(DioException e) {
+    if (isTelegramLiveLocationBackendError(e)) {
+      return DriverUserException(
+        parseDriverApiErrorMessage(e) ?? '',
+        userCode: 'LIVE_LOCATION_INACTIVE',
+      );
+    }
+    return DriverUserException(
+      parseDriverApiErrorMessage(e) ??
+          'Safarni boshlash uchun olib ketish nuqtasiga yaqinlashing.',
+      userCode: 'PICKUP_TOO_FAR',
+    );
+  }
+
   DriverUserException _tripActionException(DioException e, String fallback) {
     final code = (parseDriverApiErrorCode(e) ?? '').toUpperCase();
     final msg = parseDriverApiErrorMessage(e);
@@ -1555,6 +1874,7 @@ class TripController extends Notifier<TripState> {
     }
     final prevStatus = state.status;
     final prevOdometer = state.clientOdometerKm;
+    final prevAdvance = _heldAdvanceFor(tid);
     _publishTripState(
       state.copyWith(status: TripStatus.arrived, clientOdometerKm: 0),
     );
@@ -1586,8 +1906,26 @@ class TripController extends Notifier<TripState> {
             '[yetti_driver] POST /trip/arrived failed: HTTP ${e.response?.statusCode ?? '—'} code=${code ?? '—'}',
           );
         }
+        if (isPickupProximityRejection(e)) {
+          // Product rule: never block the driver on distance — the local stage
+          // stays ARRIVED. But the server is now behind, so say so and let the
+          // live poll / finish replay catch it up once the fix is close enough.
+          throw _serverBehindException(e);
+        }
         if (!isPickupProximityRejection(e)) {
-          _clearLocalAdvance();
+          final rawServer = await _rawServerStatusAfterFailure(e, tid);
+          if (_isCancelledRaw(rawServer)) {
+            await _closeCancelledTrip(tid);
+            throw _tripCancelledException(e);
+          }
+          if (await _serverAlreadyApplied(
+            parseServerTripStatus(rawServer),
+            expected: TripStatus.arrived,
+            prevStatus: prevStatus,
+          )) {
+            return;
+          }
+          _restoreLocalAdvance(prevAdvance);
           _revertStatus(prevStatus, prevOdometer);
           throw _tripActionException(e, 'Yetib kelishni qayd etib bo‘lmadi.');
         }
@@ -1618,47 +1956,113 @@ class TripController extends Notifier<TripState> {
     }
     final prevStatus = state.status;
     final prevOdometer = state.clientOdometerKm;
+    final prevAdvance = _heldAdvanceFor(tid);
     _publishTripState(
       state.copyWith(status: TripStatus.started, clientOdometerKm: 0),
     );
     // Tap feedback must be instant; do not wait for network round-trips.
     unawaited(TripStatusVoice.playStartTripSound());
     _noteLocalAdvance(TripStatus.started);
-    _syncLiveTripPoll();
     final repo = _repo;
-    if (repo != null) {
-      if (lat != null && lng != null) {
-        sendDriverLocationWs(lat: lat, lng: lng);
+    if (repo == null) {
+      _syncLiveTripPoll();
+      return;
+    }
+    if (lat != null && lng != null) {
+      sendDriverLocationWs(lat: lat, lng: lng);
+    }
+    // The live `GET /trip/:id` poll starts only once `/trip/start` has been answered
+    // (below). Starting it here, before the POST, made its first refresh see the
+    // server still at ARRIVED and replay a second `/trip/start` in parallel with
+    // this one — a single tap hit the endpoint twice.
+    try {
+      await repo.postTripStart(
+        tid,
+        lat: lat,
+        lng: lng,
+        accuracy: accuracy,
+        timestamp: fixTime,
+      );
+      // See [toArrived]: a 200 does not mean the server has committed STARTED yet.
+    } on DioException catch (e) {
+      if (kDebugMode) {
+        final code = parseDriverApiErrorCode(e);
+        debugPrint(
+          '[yetti_driver] POST /trip/start failed: HTTP ${e.response?.statusCode ?? '—'} code=${code ?? '—'}',
+        );
       }
-      try {
-        await repo.postTripStart(
+      // The server can gate START on pickup proximity (`400 PICKUP_TOO_FAR`, backend
+      // `PICKUP_START_MAX_METERS`; off by default, so this only fires when a deployment
+      // re-enables the radius). Unlike arrival, it cannot be softened locally: `/trip/finish` requires the
+      // server to be at STARTED, so a trip the app alone considers started can never
+      // be finished — every Finish tap 409s, replays the start, gets the same 400,
+      // flashes the fare popup and rolls back. Stay honest: keep "Safarni boshlash"
+      // on screen and tell the driver to get closer to the pickup.
+      if (isPickupProximityRejection(e)) {
+        _restoreLocalAdvance(prevAdvance);
+        _revertStatus(prevStatus, prevOdometer);
+        _cancelLiveTripPoll();
+        throw _pickupTooFarException(e);
+      }
+      final rawServer = await _rawServerStatusAfterFailure(e, tid);
+      if (_isCancelledRaw(rawServer)) {
+        await _closeCancelledTrip(tid);
+        throw _tripCancelledException(e);
+      }
+      final serverStatus = parseServerTripStatus(rawServer);
+      if (await _serverAlreadyApplied(
+        serverStatus,
+        expected: TripStatus.started,
+        prevStatus: prevStatus,
+      )) {
+        _syncLiveTripPoll();
+        return;
+      }
+      var failure = e;
+      if (_isInvalidTransition(e)) {
+        // Server still at WAITING (arrived never landed): replay, retry.
+        final replayError = await _replayServerStepsUpTo(
           tid,
+          TripStatus.arrived,
+          from: serverStatus,
           lat: lat,
           lng: lng,
           accuracy: accuracy,
-          timestamp: fixTime,
+          fixTime: fixTime,
         );
-        // See [toArrived]: a 200 does not mean the server has committed STARTED yet.
-      } on DioException catch (e) {
-        if (kDebugMode) {
-          final code = parseDriverApiErrorCode(e);
-          debugPrint(
-            '[yetti_driver] POST /trip/start failed: HTTP ${e.response?.statusCode ?? '—'} code=${code ?? '—'}',
-          );
-        }
-        // Same soft rejections as [toArrived] (proximity / Telegram-live wording) — advance locally for UX parity with web.
-        if (!isPickupProximityRejection(e)) {
-          _clearLocalAdvance();
-          _revertStatus(prevStatus, prevOdometer);
-          _cancelLiveTripPoll();
-          throw _tripActionException(e, 'Safarni boshlab bo‘lmadi.');
+        if (replayError == null) {
+          try {
+            await repo.postTripStart(
+              tid,
+              lat: lat,
+              lng: lng,
+              accuracy: accuracy,
+              timestamp: fixTime,
+            );
+            _syncLiveTripPoll();
+            return;
+          } on DioException catch (e2) {
+            failure = e2;
+          }
+        } else {
+          failure = replayError;
         }
       }
+      _restoreLocalAdvance(prevAdvance);
+      _revertStatus(prevStatus, prevOdometer);
+      _cancelLiveTripPoll();
+      throw _tripActionException(failure, 'Safarni boshlab bo‘lmadi.');
     }
+    _syncLiveTripPoll();
   }
 
   /// `POST /trip/finish` — end trip from driver; then disconnect WS (same local cleanup as cancel).
-  Future<void> finishTrip() async {
+  Future<void> finishTrip({
+    double? lat,
+    double? lng,
+    double? accuracy,
+    DateTime? fixTime,
+  }) async {
     final tid = state.activeRequest?.tripId;
     if (tid == null) {
       throw DriverUserException('', userCode: 'TRIP_ACTION_NO_TRIP');
@@ -1676,6 +2080,7 @@ class TripController extends Notifier<TripState> {
     final popup = TripFareCompletionPopup(
       fareSom: req?.fareSom,
       distanceKm: mergeKm(req?.distanceKm),
+      tripId: tid,
     );
     final prevStatus = state.status;
     final prevRequest = req;
@@ -1685,6 +2090,11 @@ class TripController extends Notifier<TripState> {
     // Publish first so the UI settles on the tap; roll back if the server refuses.
     // A poll started before the finish landed can still carry `assigned_trip` for this
     // trip and would re-hydrate it as active, so suppress that id for a short window.
+    //
+    // The fare dialog itself waits for the server's confirmation (see
+    // [_publishFarePopup] below). The home screen shows it once per trip, so a dialog
+    // opened optimistically and then rolled back both stayed open over a trip that was
+    // not finished and used up that trip's one showing.
     _markTripFinishedLocally(tid);
     _cancelLiveTripPoll();
     _publishTripState(
@@ -1692,7 +2102,7 @@ class TripController extends Notifier<TripState> {
         status: TripStatus.finished,
         activeRequest: () => null,
         remoteLiveLocation: () => null,
-        fareCompletionPopup: () => popup,
+        fareCompletionPopup: () => null,
         clientOdometerKm: 0,
       ),
     );
@@ -1703,6 +2113,48 @@ class TripController extends Notifier<TripState> {
       try {
         await repo.postTripFinish(tid);
       } on DioException catch (e) {
+        final rawServer = await _rawServerStatusAfterFailure(e, tid);
+        if (_isCancelledRaw(rawServer)) {
+          // Cancelled meanwhile (rider / dispatcher): nothing left to finish, and
+          // no fare to show for it.
+          await _closeCancelledTrip(tid);
+          throw _tripCancelledException(e);
+        }
+        final serverStatus = parseServerTripStatus(rawServer);
+        if (await _serverAlreadyApplied(
+          serverStatus,
+          expected: TripStatus.finished,
+          prevStatus: prevStatus,
+        )) {
+          _publishFarePopup(popup);
+          await _disconnectWs();
+          return;
+        }
+        var failure = e;
+        if (_isInvalidTransition(e)) {
+          // Server is behind (arrived/start never landed there): replay, retry.
+          final replayError = await _replayServerStepsUpTo(
+            tid,
+            TripStatus.started,
+            from: serverStatus,
+            lat: lat,
+            lng: lng,
+            accuracy: accuracy,
+            fixTime: fixTime,
+          );
+          if (replayError == null) {
+            try {
+              await repo.postTripFinish(tid);
+              _publishFarePopup(popup);
+              await _disconnectWs();
+              return;
+            } on DioException catch (e2) {
+              failure = e2;
+            }
+          } else {
+            failure = replayError;
+          }
+        }
         _unmarkTripFinishedLocally(tid);
         _publishTripState(
           state.copyWith(
@@ -1714,11 +2166,19 @@ class TripController extends Notifier<TripState> {
           ),
         );
         if (prevStatus == TripStatus.started) _syncLiveTripPoll();
-        throw _tripActionException(e, 'Safarni tugatib bo‘lmadi.');
+        throw _tripActionException(failure, 'Safarni tugatib bo‘lmadi.');
       }
     }
+    _publishFarePopup(popup);
     await _disconnectWs();
   }
+
+  /// Show the completion summary — only once the server has confirmed the finish
+  /// (or the trip was already closed there). A WS `trip_finished` / poll FINISHED
+  /// that raced in earlier kept the popup empty for a locally finished trip, so this
+  /// is the single place the finish-button path produces it.
+  void _publishFarePopup(TripFareCompletionPopup popup) =>
+      _publishTripState(state.copyWith(fareCompletionPopup: () => popup));
 
   void _markTripFinishedLocally(String tripId) {
     _finishedTripIds.add(tripId);
@@ -1729,7 +2189,8 @@ class TripController extends Notifier<TripState> {
   }
 
   /// Undo the local finish mark — used when `POST /trip/finish` fails and we roll back.
-  void _unmarkTripFinishedLocally(String tripId) => _finishedTripIds.remove(tripId);
+  void _unmarkTripFinishedLocally(String tripId) =>
+      _finishedTripIds.remove(tripId);
 
   /// True when [tripId] was completed/cancelled on this device. Such a trip must never be
   /// resurrected by a stale server snapshot, for the rest of the session.
@@ -1747,10 +2208,19 @@ class TripController extends Notifier<TripState> {
       try {
         await repo.postTripCancelDriver(tid);
       } on DioException catch (e) {
-        throw _tripActionException(e, 'Safarni bekor qilib bo‘lmadi.');
+        // Lost reply / "invalid transition": the cancel may already be on the server.
+        final raw = _actionOutcomeUnknown(e)
+            ? (await _fetchServerTripStatusString(tid) ?? '').toUpperCase()
+            : '';
+        final alreadyClosed = raw.startsWith('CANCEL') || raw == 'FINISHED';
+        if (!alreadyClosed) {
+          throw _tripActionException(e, 'Safarni bekor qilib bo‘lmadi.');
+        }
       }
     }
     _markTripFinishedLocally(tid);
+    _cancelLiveTripPoll();
+    _clearLocalAdvance();
     state = state.copyWith(
       status: TripStatus.finished,
       activeRequest: () => null,

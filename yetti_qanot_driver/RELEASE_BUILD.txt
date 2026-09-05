@@ -32,11 +32,13 @@ Version: see pubspec.yaml (versionName + versionCode after the +).
      draws a straight driver→pickup segment and makes no routing requests).
      A debug-build warning is logged while the demo server is still in use.
 
-   - Basemap tiles come from CARTO (basemaps.cartocdn.com), see
-     lib/features/home/presentation/widgets/osm_trip_map.dart. Confirm your
-     traffic volume is covered by a CARTO plan, or swap the TileLayer for a
-     provider you have rights to. Keep the "© OSM · © CARTO" attribution
-     visible either way — it is required by both licences.
+   - Basemap tiles default to the OpenStreetMap tile API
+     (https://tile.openstreetmap.org). The OSMF tile usage policy allows light
+     app use with a valid User-Agent + attribution (both set in
+     lib/features/home/presentation/widgets/osm_trip_map.dart) but NOT heavy or
+     bulk traffic. For a production fleet, point the app at your own tile server
+     or a commercial OSM tile provider:
+       --dart-define=MAP_TILE_URL_TEMPLATE=https://tiles.your-domain.com/{z}/{x}/{y}.png
 
    - The API base URL defaults to a free-tier Render host
      (https://taxi-2r2j.onrender.com), which sleeps when idle and cold-starts.

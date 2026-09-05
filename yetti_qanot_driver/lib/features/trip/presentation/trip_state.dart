@@ -17,10 +17,15 @@ enum TripHydrationIssue {
 
 /// Shown once in a dialog after a completed trip ([TripController.clearFareCompletionPopup]).
 class TripFareCompletionPopup {
-  const TripFareCompletionPopup({this.fareSom, this.distanceKm});
+  const TripFareCompletionPopup({this.fareSom, this.distanceKm, this.tripId});
 
   final double? fareSom;
   final double? distanceKm;
+
+  /// Trip this summary belongs to. The home screen shows **one** completion
+  /// dialog per trip, whichever path (finish button, dispatch poll, WebSocket,
+  /// reconcile) produced the summary first.
+  final String? tripId;
 }
 
 class TripState {
